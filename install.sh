@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 轻量级邮件服务器一键安装脚本 (终极版)
+# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 )
 #
-# 作者: 小龙女她爸
+# 作者: 小龙女她爸 
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -66,7 +66,7 @@ uninstall_server() {
     exit 0
 }
 
-# --- Caddy反代功能 (已修复BUG) ---
+# --- Caddy反代功能 ---
 setup_caddy_reverse_proxy() {
     echo -e "${BLUE}>>> 欢迎使用 Caddy 自动反向代理配置向导 <<<${NC}"
 
@@ -113,7 +113,6 @@ setup_caddy_reverse_proxy() {
     fi
 
     echo -e "${YELLOW}>>> 正在重新加载 Caddy 服务以应用新配置...${NC}"
-    # 修复: 如果服务未运行，则启动它
     if ! systemctl is-active --quiet caddy; then
         systemctl start caddy
     fi
@@ -162,49 +161,43 @@ install_server() {
     read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
     ADMIN_USERNAME=${ADMIN_USERNAME:-${EXISTING_ADMIN}}
     
-    # 密码需要特殊处理，仅当用户输入新密码时才更新
     read -sp "请为管理员账户 '${ADMIN_USERNAME}' 设置登录密码 (留空则不修改): " ADMIN_PASSWORD
     echo
     
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
     
-    echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
-    PUBLIC_IP=$(curl -s icanhazip.com || echo "127.0.0.1")
-    if [ -z "$PUBLIC_IP" ]; then
-        echo -e "${RED}错误：无法自动获取公网IP地址。${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}服务器公网IP为: ${PUBLIC_IP}${NC}"
-
+    # --- 基础环境和依赖安装 ---
     handle_apt_locks
     echo -e "${GREEN}>>> 步骤 1: 更新系统并安装依赖...${NC}"
     apt-get update
     apt-get -y upgrade
     apt-get -y install python3-pip python3-venv ufw curl
     
-    echo -e "${GREEN}>>> 步骤 2: 配置防火墙...${NC}"
-    ufw allow ssh
-    ufw allow 25/tcp
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow ${WEB_PORT}/tcp
-    ufw --force enable
-
-    echo -e "${GREEN}>>> 步骤 3: 创建应用程序...${NC}"
+    echo -e "${GREEN}>>> 步骤 2: 创建应用程序目录和虚拟环境...${NC}"
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
     ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
-    
-    echo -e "${GREEN}>>> 步骤 4: 写入核心应用代码 (app.py)...${NC}"
-    # 仅当用户输入了新密码时，才生成新的密码哈希
+
+    # === 修复: 密码处理逻辑 ===
     if [ -n "$ADMIN_PASSWORD" ]; then
+        echo -e "${BLUE}>>> 正在为您设置新的管理员密码...${NC}"
         ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
     else
-        # 否则，从旧文件中读取哈希值
-        ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "INVALID_HASH")
+        if [ -f "${PROJECT_DIR}/app.py" ]; then
+            ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null)
+            if [ -z "$ADMIN_PASSWORD_HASH" ]; then
+                 echo -e "${RED}错误：无法从现有文件中读取旧密码，请重新运行时设置一个新密码。${NC}"
+                 exit 1
+            fi
+            echo -e "${BLUE}>>> 已保留现有的管理员密码。${NC}"
+        else
+            echo -e "${RED}错误：首次安装时必须设置管理员密码。${NC}"
+            exit 1
+        fi
     fi
     
+    echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
@@ -427,8 +420,6 @@ def send_email_via_smtp(to_address, subject, body):
     except Exception as e:
         app.logger.error(f"通过 SendGrid SMTP 发送邮件失败: {e}")
         return False, f"邮件发送失败: {e}"
-
-# === 修改: 增加回复功能逻辑 ===
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
@@ -440,18 +431,17 @@ def compose_email():
         
         if not to_address or not subject:
             flash('收件人和主题不能为空！', 'error')
-            form_data = {'to': to_address, 'subject': subject, 'body': body} # 保存用户输入
+            form_data = {'to': to_address, 'subject': subject, 'body': body}
         else:
             success, message = send_email_via_smtp(to_address, subject, body)
             flash(message, 'success' if success else 'error')
             if success:
                 return redirect(url_for('index'))
             else:
-                form_data = {'to': to_address, 'subject': subject, 'body': body} # 发送失败，依然保存
+                form_data = {'to': to_address, 'subject': subject, 'body': body}
 
-    # 处理 GET 请求和回复逻辑
     reply_to_id = request.args.get('reply_to_id')
-    if reply_to_id and not form_data: # 仅当不是POST失败时才加载回复
+    if reply_to_id and not form_data:
         try:
             conn = get_db_conn()
             query = "SELECT * FROM received_emails WHERE id = ?"
@@ -480,7 +470,6 @@ def compose_email():
                 body_content = strip_tags_for_preview(original_email['body'] or '')
                 quoted_text = "\\n".join([f"> {line}" for line in body_content.splitlines()])
                 form_data['body'] = f"\\n\\n\\n--- On {bjt_str}, {original_email['sender']} wrote: ---\\n{quoted_text}"
-
         except Exception as e:
             app.logger.error(f"加载回复邮件时出错: {e}")
             flash("加载原始邮件以供回复时出错。", 'error')
@@ -526,7 +515,6 @@ def compose_email():
         </form>
         </div></body></html>
     ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, form_data=form_data)
-
 def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
     if token_view_context:
         endpoint = 'view_mail_by_token'
@@ -633,15 +621,11 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             </form>
             <div class="pagination">
                 {% if page > 1 %}
-                    {% set pagination_params = {'page': page-1, 'search': search_query} %}
-                    {% if token_view_context %}{% set _ = pagination_params.update({'token': token_view_context.token, 'mail': token_view_context.mail}) %}{% endif %}
-                    <a href="{{url_for(endpoint, **pagination_params)}}">&laquo; 上一页</a>
+                    <a href="{{url_for(endpoint, page=page-1, search=search_query)}}">&laquo; 上一页</a>
                 {% endif %}
                 <span> Page {{page}} / {{total_pages}} </span>
                 {% if page < total_pages %}
-                    {% set pagination_params = {'page': page + 1, 'search': search_query} %}
-                    {% if token_view_context %}{% set _ = pagination_params.update({'token': token_view_context.token, 'mail': token_view_context.mail}) %}{% endif %}
-                    <a href="{{url_for(endpoint, **pagination_params)}}">下一页 &raquo;</a>
+                    <a href="{{url_for(endpoint, page=page+1, search=search_query)}}">下一页 &raquo;</a>
                 {% endif %}
             </div>
         </div>
@@ -733,8 +717,6 @@ def delete_all_emails():
     finally:
         if conn: conn.close()
     return redirect(url_for('admin_view'))
-
-# === 修改: 增加回复按钮的邮件详情页 ===
 @app.route('/view_email/<int:email_id>')
 @login_required
 def view_email_detail(email_id):
@@ -878,7 +860,13 @@ if __name__ == '__main__':
         app.logger.info("SMTP 服务器已关闭。")
 EOF
     
-    echo -e "${GREEN}>>> 步骤 5: 写入 systemd 服务文件...${NC}"
+    echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
+    ufw allow ssh
+    ufw allow 25/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow ${WEB_PORT}/tcp
+    ufw --force enable
 
     SMTP_SERVICE_CONTENT="[Unit]
 Description=Custom Python SMTP Server (Receive-Only)
@@ -912,11 +900,9 @@ WantedBy=multi-user.target
 "
     echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
 
-    echo -e "${GREEN}>>> 步骤 6: 替换占位符并启动服务...${NC}"
+    echo -e "${GREEN}>>> 步骤 5: 替换占位符并启动服务...${NC}"
     sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME}#g" "${PROJECT_DIR}/app.py"
-    if [ -n "$ADMIN_PASSWORD" ]; then
-      sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
-    fi
+    sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
@@ -930,10 +916,6 @@ WantedBy=multi-user.target
     echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
     echo "================================================================"
     echo ""
-    echo -e "${RED}重要安全警告：${NC}"
-    echo -e "您的Web后台正通过 ${YELLOW}HTTP协议${NC} 暴露在公网上，这意味着您的登录密码将以 ${RED}明文传输${NC}。"
-    echo "此模式仅建议用于临时测试，请尽快配置域名和反向代理以启用HTTPS安全连接 (运行脚本选择选项3)。"
-    echo "----------------------------------------------------------------"
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
@@ -946,7 +928,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}轻量级邮件服务器一键安装脚本 (终极版)${NC}"
+echo -e "${BLUE}轻量级邮件服务器一键脚本${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
