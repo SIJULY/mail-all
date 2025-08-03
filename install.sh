@@ -2,7 +2,7 @@
 # =================================================================================
 # 小龙女她爸邮局服务系统一键安装脚本
 #
-# 作者: 小龙女她爸 
+# 作者: 小龙女她爸
 # 日期: 2025-08-04
 # =================================================================================
 
@@ -146,7 +146,7 @@ install_server() {
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
-        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮局服务系统一安装键脚本！${NC}"
+        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮局服务系统一键安装脚本！${NC}"
         EXISTING_TITLE="小龙女她爸邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
@@ -466,9 +466,9 @@ def send_email_via_smtp(to_address, subject, body):
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
         server.quit()
-        return True, f"邮件已通过 SendGrid 成功发送至 {to_address}"
+        return True, f"邮件已成功发送至 {to_address}"
     except Exception as e:
-        app.logger.error(f"通过 SendGrid SMTP 发送邮件失败: {e}")
+        app.logger.error(f"通过 SMTP 发送邮件失败: {e}")
         return False, f"邮件发送失败: {e}"
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
@@ -529,7 +529,7 @@ def compose_email():
             flash("加载原始邮件以供回复时出错。", 'error')
 
     return render_template_string('''
-        <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
+        <!DOCTYPE html><html><head><title>写新邮件 - {{SYSTEM_TITLE}}</title><style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
             .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
             h2 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
@@ -542,7 +542,7 @@ def compose_email():
             .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
             .nav-link { font-size: 1.2em; }
         </style></head><body><div class="container">
-        <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件 (通过 SendGrid SMTP)</h2>
+        <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件</h2>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% for category, message in messages %}
                 <div class="flash-{{ category }}">{{ message }}</div>
@@ -597,6 +597,9 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; font-size: 14px; }
             .container { max-width: 95%; margin: 0 auto; padding: 1em; }
+            .flash-success, .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; border: 1px solid transparent; transition: opacity 0.5s ease; }
+            .flash-success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
+            .flash-error { background-color: #f8d7da; color: #721c24; border-color: #f5c6cb; }
             table { border-collapse: collapse; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: #fff; margin-top: 1.5em; border: 1px solid #dee2e6; }
             th, td { padding: 12px 15px; vertical-align: middle; border-bottom: 1px solid #dee2e6; border-right: 1px solid #dee2e6; word-break: break-all; }
             th:last-child, td:last-child { border-right: none; }
@@ -621,6 +624,11 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             td { text-align: left; } .preview-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
         </style></head><body>
         <div class="container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <div class="flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
             <div class="top-bar">
                 <h2>{{title}}</h2>
                 <div class="user-actions">
@@ -692,6 +700,15 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
                 var checkboxes = document.getElementsByName('selected_ids');
                 for(var i=0; i < checkboxes.length; i++) { checkboxes[i].checked = source.checked; }
             }
+            document.addEventListener('DOMContentLoaded', function() {
+                const flashMessages = document.querySelectorAll('.flash-success, .flash-error');
+                flashMessages.forEach(function(message) {
+                    setTimeout(function() {
+                        message.style.opacity = '0';
+                        setTimeout(function() { message.style.display = 'none'; }, 500);
+                    }, 5000); // 5 seconds
+                });
+            });
         </script>
         </body></html>
     ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context, sending_enabled=sending_enabled)
@@ -991,7 +1008,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本 (智能API终极版V5)${NC}"
+echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
