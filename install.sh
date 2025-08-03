@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮件服务系统一键安装脚本
+# 小龙女她爸邮局服务系统一键安装脚本
 #
-# 作者: 小龙女她爸
+# 作者: 小龙女她爸 
 # 日期: 2025-08-04
 # =================================================================================
 
@@ -146,8 +146,8 @@ install_server() {
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
-        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮件服务系统！${NC}"
-        EXISTING_TITLE="小龙女她爸邮件服务系统"
+        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮局服务系统一安装键脚本！${NC}"
+        EXISTING_TITLE="小龙女她爸邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
@@ -792,16 +792,23 @@ def view_email_detail(email_id):
         conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
     conn.close()
     
+    sending_enabled = bool(SMTP_PASSWORD and DEFAULT_SENDER)
     _, sender_address = parseaddr(email['sender'])
-    can_reply = '@' in (sender_address or '')
+    is_replyable_address = '@' in (sender_address or '')
+
+    reply_button_html = ''
+    if not sending_enabled:
+        reply_button_html = '<a href="#" class="btn disabled" title="发件功能未配置，无法回复">回复</a>'
+    elif not is_replyable_address:
+        reply_button_html = '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
+    else:
+        reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>'
 
     body_content = email['body'] or ''
     if 'text/html' in (email['body_type'] or ''):
         email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
-    
-    reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>' if can_reply else '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
 
     return render_template_string(f'''
         <!DOCTYPE html><html><head><title>邮件详情</title>
@@ -984,7 +991,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}小龙女她爸邮件服务器一键脚本 (智能API终极版V2)${NC}"
+echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本 (智能API终极版V5)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
