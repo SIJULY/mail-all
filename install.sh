@@ -146,7 +146,7 @@ install_server() {
     else
         IS_UPDATE=false
         echo -e "${GREEN}>>> 欢迎使用轻量级邮件服务器一键安装脚本！${NC}"
-        EXISTING_TITLE="轻量级邮件服务器"
+        EXISTING_TITLE="小龙女她爸的邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
