@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 - SendGrid SMTP 发件)
+# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 )
 #
-# 作者: 小龙女她爸 (由 Gemini 根据用户成功案例修改)
+# 作者: 小龙女她爸 
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -66,7 +66,7 @@ uninstall_server() {
     exit 0
 }
 
-# --- Caddy反代功能 ---
+# --- Caddy反代功能 (已修复BUG) ---
 setup_caddy_reverse_proxy() {
     echo -e "${BLUE}>>> 欢迎使用 Caddy 自动反向代理配置向导 <<<${NC}"
 
@@ -98,20 +98,23 @@ setup_caddy_reverse_proxy() {
     read -p "请确认您的邮件服务Web后台端口 [默认为 ${WEB_PORT}]: " USER_WEB_PORT
     WEB_PORT=${USER_WEB_PORT:-${WEB_PORT}}
 
+    # === 修复: 使用规范、独立的文件进行配置 ===
     echo -e "${YELLOW}>>> 正在生成 Caddyfile 配置文件...${NC}"
-    CADDYFILE_CONTENT="{
-    $DOMAIN_NAME
-}
-
-$DOMAIN_NAME {
+    CADDYFILE_CONTENT="${DOMAIN_NAME} {
     encode gzip
     reverse_proxy 127.0.0.1:${WEB_PORT}
     tls ${LETSENCRYPT_EMAIL}
 }"
     
+    # 确保 conf.d 目录存在
     mkdir -p /etc/caddy/conf.d/
-    # 注意这里是追加模式 >>，避免覆盖已有配置
-    echo "${CADDYFILE_CONTENT}" >> /etc/caddy/Caddyfile
+    # 将配置写入独立的 mail_server.caddy 文件，使用覆盖模式
+    echo "${CADDYFILE_CONTENT}" > /etc/caddy/conf.d/mail_server.caddy
+    
+    # 确保主 Caddyfile 导入了我们的配置目录
+    if ! grep -q "import /etc/caddy/conf.d/\*.caddy" /etc/caddy/Caddyfile; then
+        echo -e "\nimport /etc/caddy/conf.d/*.caddy" >> /etc/caddy/Caddyfile
+    fi
 
     echo -e "${YELLOW}>>> 正在重新加载 Caddy 服务以应用新配置...${NC}"
     systemctl reload caddy
@@ -133,7 +136,6 @@ $DOMAIN_NAME {
 install_server() {
     echo -e "${GREEN}欢迎使用轻量级邮件服务器一键安装脚本！${NC}"
     
-    # --- 收集用户信息 ---
     read -p "请输入您想为本系统命名的标题 (例如: 我的私人邮箱): " SYSTEM_TITLE
     SYSTEM_TITLE=${SYSTEM_TITLE:-"轻量级邮件服务器"}
 
@@ -144,7 +146,6 @@ install_server() {
         exit 1
     fi
 
-    # === 修改: 只收集 SendGrid API 密钥 ===
     echo "--- SendGrid SMTP 发件服务配置 ---"
     echo -e "${YELLOW}本功能将使用 SendGrid SMTP 发送邮件。${NC}"
     read -p "请输入您的 SendGrid API 密钥 (作为SMTP密码，可留空): " SENDGRID_API_KEY
@@ -161,7 +162,6 @@ install_server() {
     echo
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
     
-    # --- 自动获取公网IP ---
     echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
     PUBLIC_IP=$(curl -s icanhazip.com || echo "127.0.0.1")
     if [ -z "$PUBLIC_IP" ]; then
@@ -170,14 +170,12 @@ install_server() {
     fi
     echo -e "${GREEN}服务器公网IP为: ${PUBLIC_IP}${NC}"
 
-    # --- 步骤 1: 清理APT环境并安装依赖 ---
     handle_apt_locks
     echo -e "${GREEN}>>> 步骤 1: 更新系统并安装依赖...${NC}"
     apt-get update
     apt-get -y upgrade
     apt-get -y install python3-pip python3-venv ufw curl
     
-    # --- 步骤 2: 配置防火墙 ---
     echo -e "${GREEN}>>> 步骤 2: 配置防火墙...${NC}"
     ufw allow ssh
     ufw allow 25/tcp
@@ -186,18 +184,14 @@ install_server() {
     ufw allow ${WEB_PORT}/tcp
     ufw --force enable
 
-    # --- 步骤 3: 创建应用程序 ---
     echo -e "${GREEN}>>> 步骤 3: 创建应用程序...${NC}"
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-    # === 修改: 不再需要 sendgrid 库 ===
     ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
     
-    # --- 步骤 4: 写入核心应用代码 ---
     echo -e "${GREEN}>>> 步骤 4: 写入核心应用代码 (app.py)...${NC}"
     ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
-    # === 修改: 整个app.py文件内容有更新 ===
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
@@ -226,12 +220,11 @@ SPECIAL_VIEW_TOKEN = "2088"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
-# === 修改: 使用 SMTP 配置 ===
 SMTP_SERVER = "smtp.sendgrid.net"
 SMTP_PORT = 587
-SMTP_USERNAME = "apikey" # 对于SendGrid, 用户名固定是 "apikey"
-SMTP_PASSWORD = "_PLACEHOLDER_SENDGRID_API_KEY_" # API Key 作为密码
-DEFAULT_SENDER = "noreply@mail.sijuly.nyc.mn" # 您已经验证过的发件人地址
+SMTP_USERNAME = "apikey"
+SMTP_PASSWORD = "_PLACEHOLDER_SENDGRID_API_KEY_"
+DEFAULT_SENDER = "noreply@mail.sijuly.nyc.mn"
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -239,7 +232,6 @@ handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
-# --- 数据库及工具函数 (与之前版本保持一致) ---
 def get_db_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -265,7 +257,7 @@ def run_cleanup_if_needed():
                 last_cleanup_time = datetime.fromisoformat(f.read().strip())
             if now - last_cleanup_time < timedelta(days=CLEANUP_INTERVAL_DAYS): return
         except Exception:
-            pass # 如果文件有问题，则继续执行
+            pass
     app.logger.info(f"开始执行定时邮件清理任务...")
     conn = get_db_conn()
     deleted_count = conn.execute(f"DELETE FROM received_emails WHERE id NOT IN (SELECT id FROM received_emails ORDER BY id DESC LIMIT {EMAILS_TO_KEEP})").rowcount
@@ -273,8 +265,6 @@ def run_cleanup_if_needed():
     conn.close()
     if deleted_count > 0: app.logger.info(f"清理完成，成功删除了 {deleted_count} 封旧邮件。")
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
-
-# ... 其他核心函数 (process_email_data, extract_code_from_body, 等) 保持不变 ...
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
@@ -340,9 +330,6 @@ def strip_tags_for_preview(html_content):
     if not html_content: return ""
     text_content = re.sub(r'<style.*?</style>|<script.*?</script>|<[^>]+>', ' ', html_content, flags=re.S)
     return re.sub(r'\s+', ' ', text_content).strip()
-
-
-# === 修改: 认证和路由函数 ===
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -410,12 +397,9 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear(); return redirect(url_for('login'))
-
-# === 修改: 发件函数，使用 SendGrid SMTP ===
 def send_email_via_smtp(to_address, subject, body):
     if not SMTP_PASSWORD:
         return False, "SendGrid API密钥未配置，无法发送邮件。"
-
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = DEFAULT_SENDER
@@ -430,8 +414,6 @@ def send_email_via_smtp(to_address, subject, body):
     except Exception as e:
         app.logger.error(f"通过 SendGrid SMTP 发送邮件失败: {e}")
         return False, f"邮件发送失败: {e}"
-
-# === 修改: 发件页面路由，调用新的发件函数 ===
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
@@ -450,19 +432,14 @@ def compose_email():
         if success:
             return redirect(url_for('index'))
         else:
-            # 如果发送失败，保留用户输入的内容
             return render_template_string('''
                 <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
                     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
                     .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                    h2 { color: #333; }
-                    a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
-                    form { margin-top: 1.5em; }
-                    .form-group { margin-bottom: 1em; }
-                    label { display: block; margin-bottom: .5em; color: #555; }
+                    h2 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
+                    form { margin-top: 1.5em; } .form-group { margin-bottom: 1em; } label { display: block; margin-bottom: .5em; color: #555; }
                     input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
-                    input[readonly] { background-color: #e9ecef; }
-                    textarea { height: 200px; resize: vertical; }
+                    input[readonly] { background-color: #e9ecef; } textarea { height: 200px; resize: vertical; }
                     button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
                     button:hover { background-color: #0056b3; }
                     .flash-success { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
@@ -496,20 +473,14 @@ def compose_email():
                 </form>
                 </div></body></html>
             ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, to_address=to_address, subject=subject, body=body)
-
-    # GET request: 显示一个空的表单
     return render_template_string('''
         <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
             .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h2 { color: #333; }
-            a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
-            form { margin-top: 1.5em; }
-            .form-group { margin-bottom: 1em; }
-            label { display: block; margin-bottom: .5em; color: #555; }
+            h2 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
+            form { margin-top: 1.5em; } .form-group { margin-bottom: 1em; } label { display: block; margin-bottom: .5em; color: #555; }
             input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
-            input[readonly] { background-color: #e9ecef; }
-            textarea { height: 200px; resize: vertical; }
+            input[readonly] { background-color: #e9ecef; } textarea { height: 200px; resize: vertical; }
             button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
             button:hover { background-color: #0056b3; }
             .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
@@ -542,8 +513,6 @@ def compose_email():
         </form>
         </div></body></html>
     ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER)
-
-# --- 邮件列表等其他视图函数保持不变 ---
 def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
     if token_view_context:
         endpoint = 'view_mail_by_token'
@@ -580,10 +549,8 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             .top-bar h2 { margin: 0; color: #333; font-size: 1.5em; }
             .top-bar .user-actions { display: flex; gap: 10px; }
             .btn { text-decoration: none; display: inline-block; padding: 8px 15px; border: 1px solid transparent; border-radius: 4px; color: white; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s; white-space: nowrap; }
-            .btn-primary { background-color: #007bff; border-color: #007bff; }
-            .btn-primary:hover { background-color: #0056b3; }
-            .btn-secondary { background-color: #6c757d; border-color: #6c757d; }
-            .btn-danger { background-color: #dc3545; border-color: #dc3545; }
+            .btn-primary { background-color: #007bff; border-color: #007bff; } .btn-primary:hover { background-color: #0056b3; }
+            .btn-secondary { background-color: #6c757d; border-color: #6c757d; } .btn-danger { background-color: #dc3545; border-color: #dc3545; }
             .controls { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1.5em; border-bottom: 1px solid #dee2e6; flex-wrap: wrap; gap: 1em;}
             .controls .bulk-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
             .search-form { display: flex; gap: 5px; }
@@ -592,10 +559,8 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             .pagination a { color: #007bff; padding: 8px 12px; text-decoration: none; border: 1px solid #ddd; margin: 0 4px; border-radius: 4px; }
             .pagination a:hover { background-color: #e9ecef; }
             .preview-code { color: #e83e8c; font-weight: bold; font-family: monospace; }
-            a.view-link { color: #007bff; text-decoration: none; }
-            a.view-link:hover { text-decoration: underline; }
-            td { text-align: left; }
-            .preview-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+            a.view-link { color: #007bff; text-decoration: none; } a.view-link:hover { text-decoration: underline; }
+            td { text-align: left; } .preview-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
         </style></head><body>
         <div class="container">
             <div class="top-bar">
@@ -633,11 +598,8 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             <table>
                 <thead><tr>
                     <th style="width: 3%; min-width: 40px;"><input type="checkbox" onclick="toggleAllCheckboxes(this);" {% if not is_admin_view %}style="display:none;"{% endif %}></th>
-                    <th style="width: 15%; min-width: 160px;">时间 (北京)</th>
-                    <th style="width: 20%; min-width: 150px;">主题</th>
-                    <th style="width: 35%; min-width: 200px;">内容预览</th>
-                    <th style="width: 13%; min-width: 120px;">收件人</th>
-                    <th style="width: 14%; min-width: 120px;">发件人</th>
+                    <th style="width: 15%; min-width: 160px;">时间 (北京)</th><th style="width: 20%; min-width: 150px;">主题</th>
+                    <th style="width: 35%; min-width: 200px;">内容预览</th><th style="width: 13%; min-width: 120px;">收件人</th><th style="width: 14%; min-width: 120px;">发件人</th>
                 </tr></thead>
                 <tbody>
                 {% for mail in mails %}
@@ -649,8 +611,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
                         {% if mail.is_code %}<span class="preview-code">{{mail.preview_text|e}}</span>
                         {% else %}<div class="preview-text" title="{{mail.preview_text|e}}">{{mail.preview_text|e}}</div>{% endif %}
                     </td>
-                    <td>{{mail.recipient|e}}</td>
-                    <td>{{mail.sender|e}}</td>
+                    <td>{{mail.recipient|e}}</td><td>{{mail.sender|e}}</td>
                 </tr>
                 {% else %}<tr><td colspan="6" style="text-align:center;padding:2em;">无邮件</td></tr>{% endfor %}
                 </tbody>
@@ -678,8 +639,6 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
         </script>
         </body></html>
     ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context)
-
-# ... 剩余的所有路由函数 (view_emails, admin_view, view_email_detail, etc.) 保持原样 ...
 @app.route('/view')
 @login_required
 def view_emails():
@@ -816,8 +775,7 @@ def manage_users():
         <!DOCTYPE html><html><head><title>管理用户 - {{SYSTEM_TITLE}}</title><style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
             .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h2, h3 { color: #333; }
-            a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
+            h2, h3 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
             form { margin-bottom: 2em; padding: 1.5em; border: 1px solid #ddd; border-radius: 5px; background: #fdfdfd; }
             form.inline-form { display: inline; border: none; padding: 0; margin: 0; background: none; }
             input[type="email"], input[type="password"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
@@ -828,8 +786,7 @@ def manage_users():
             li { background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
             li:last-child { border-bottom: none; }
             .flash-success { color: green; font-weight: bold; margin-bottom: 1em; }
-            .flash-error { color: red; font-weight: bold; margin-bottom: 1em; }
-            .nav-link { font-size: 1.2em; }
+            .flash-error { color: red; font-weight: bold; margin-bottom: 1em; } .nav-link { font-size: 1.2em; }
         </style></head><body><div class="container">
         <h2><a href="{{url_for('admin_view')}}" class="nav-link">&larr; 返回收件箱</a> | 管理用户</h2>
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -881,8 +838,7 @@ if __name__ == '__main__':
         app.logger.info("SMTP 服务器已关闭。")
 EOF
     
-    # --- 步骤 5: 写入 systemd 服务文件 ---
-    echo -e "${GREEN}>>> 步骤 5: 创建 systemd 服务文件...${NC}"
+    echo -e "${GREEN}>>> 步骤 5: 写入 systemd 服务文件...${NC}"
 
     SMTP_SERVICE_CONTENT="[Unit]
 Description=Custom Python SMTP Server (Receive-Only)
@@ -916,13 +872,11 @@ WantedBy=multi-user.target
 "
     echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
 
-    # --- 步骤 6: 替换占位符并启动服务 ---
     echo -e "${GREEN}>>> 步骤 6: 替换占位符并启动服务...${NC}"
     sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    # === 修改: 只替换 SendGrid 的 API Key ===
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
     
     ${PROJECT_DIR}/venv/bin/python3 -c "from app import init_db; init_db()"
@@ -930,7 +884,6 @@ WantedBy=multi-user.target
     systemctl restart mail-smtp.service mail-api.service
     systemctl enable mail-smtp.service mail-api.service
 
-    # --- 安装完成 ---
     echo "================================================================"
     echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装完成！ 🎉${NC}"
     echo "================================================================"
@@ -954,7 +907,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}轻量级邮件服务器一键安装脚本 (Caddy整合终极版 - SendGrid SMTP 发件)${NC}"
+echo -e "${BLUE} 轻量级邮件服务器一键安装脚本 (Caddy整合终极版)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装邮件服务器核心服务"
