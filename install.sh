@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 - SendGrid API 发件)
+# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 - SendGrid SMTP 发件)
 #
-# 作者: 小龙女她爸 (由 Gemini 修改以支持 SendGrid API)
+# 作者: 小龙女她爸 (由 Gemini 根据用户成功案例修改)
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -99,19 +99,20 @@ setup_caddy_reverse_proxy() {
     WEB_PORT=${USER_WEB_PORT:-${WEB_PORT}}
 
     echo -e "${YELLOW}>>> 正在生成 Caddyfile 配置文件...${NC}"
-    CADDYFILE_CONTENT="{$DOMAIN_NAME} {
+    CADDYFILE_CONTENT="{
+    $DOMAIN_NAME
+}
+
+$DOMAIN_NAME {
     encode gzip
     reverse_proxy 127.0.0.1:${WEB_PORT}
     tls ${LETSENCRYPT_EMAIL}
 }"
     
     mkdir -p /etc/caddy/conf.d/
-    echo "${CADDYFILE_CONTENT}" > /etc/caddy/conf.d/mail_server.caddy
-    
-    if ! grep -q "import /etc/caddy/conf.d/*.caddy" /etc/caddy/Caddyfile; then
-        echo -e "\nimport /etc/caddy/conf.d/*.caddy" >> /etc/caddy/Caddyfile
-    fi
-    
+    # 注意这里是追加模式 >>，避免覆盖已有配置
+    echo "${CADDYFILE_CONTENT}" >> /etc/caddy/Caddyfile
+
     echo -e "${YELLOW}>>> 正在重新加载 Caddy 服务以应用新配置...${NC}"
     systemctl reload caddy
     
@@ -143,16 +144,10 @@ install_server() {
         exit 1
     fi
 
-    # === 新增: 收集SendGrid配置 ===
-    echo "--- SendGrid 发件服务配置 ---"
-    echo -e "${YELLOW}本功能将使用 SendGrid API 发送邮件，以获得最佳发送效果。${NC}"
-    read -p "请输入您的 SendGrid API 密钥 (可选, 可留空): " SENDGRID_API_KEY
-    
-    echo -e "${RED}重要: 请输入一个您已经在 SendGrid 后台验证过的发件人邮箱地址。${NC}"
-    read -p "请输入您在 SendGrid 验证过的发件人邮箱: " SENDGRID_FROM_EMAIL
-    if [ -z "$SENDGRID_FROM_EMAIL" ]; then
-        echo -e "${RED}错误: SendGrid发件人邮箱不能为空。${NC}"; exit 1;
-    fi
+    # === 修改: 只收集 SendGrid API 密钥 ===
+    echo "--- SendGrid SMTP 发件服务配置 ---"
+    echo -e "${YELLOW}本功能将使用 SendGrid SMTP 发送邮件。${NC}"
+    read -p "请输入您的 SendGrid API 密钥 (作为SMTP密码，可留空): " SENDGRID_API_KEY
 
     echo "--- 管理员账户设置 ---"
     read -p "请输入管理员登录名 [默认为: admin]: " ADMIN_USERNAME
@@ -196,8 +191,8 @@ install_server() {
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-    # === 修改: 增加 sendgrid 库 ===
-    ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug sendgrid
+    # === 修改: 不再需要 sendgrid 库 ===
+    ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
     
     # --- 步骤 4: 写入核心应用代码 ---
     echo -e "${GREEN}>>> 步骤 4: 写入核心应用代码 (app.py)...${NC}"
@@ -205,21 +200,19 @@ install_server() {
     # === 修改: 整个app.py文件内容有更新 ===
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
-import sqlite3, re, os, math, html, logging, sys
+import sqlite3, re, os, math, html, logging, sys, smtplib
 from functools import wraps
 from flask import Flask, request, Response, redirect, url_for, session, render_template_string, flash, get_flashed_messages, jsonify
 from email import message_from_bytes
-from email.header import decode_header
+from email.header import decode_header, Header
 from email.utils import parseaddr
+from email.mime.text import MIMEText
 from markupsafe import escape
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from werkzeug.security import check_password_hash, generate_password_hash
 import asyncio
 from aiosmtpd.controller import Controller
-# === 新增: SendGrid 相关的导入 ===
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 
 DB_FILE = 'emails.db'
 EMAILS_PER_PAGE = 50
@@ -233,9 +226,12 @@ SPECIAL_VIEW_TOKEN = "2088"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
-# === 新增: SendGrid 配置占位符 ===
-SENDGRID_API_KEY = "_PLACEHOLDER_SENDGRID_API_KEY_"
-SENDGRID_FROM_EMAIL = "_PLACEHOLDER_SENDGRID_FROM_EMAIL_"
+# === 修改: 使用 SMTP 配置 ===
+SMTP_SERVER = "smtp.sendgrid.net"
+SMTP_PORT = 587
+SMTP_USERNAME = "apikey" # 对于SendGrid, 用户名固定是 "apikey"
+SMTP_PASSWORD = "_PLACEHOLDER_SENDGRID_API_KEY_" # API Key 作为密码
+DEFAULT_SENDER = "noreply@mail.sijuly.nyc.mn" # 您已经验证过的发件人地址
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -243,7 +239,7 @@ handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
-# --- 原有函数 (get_db_conn, init_db, etc.) 保持不变 ---
+# --- 数据库及工具函数 (与之前版本保持一致) ---
 def get_db_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -264,8 +260,12 @@ def init_db():
 def run_cleanup_if_needed():
     now = datetime.now()
     if os.path.exists(LAST_CLEANUP_FILE):
-        with open(LAST_CLEANUP_FILE, 'r') as f: last_cleanup_time = datetime.fromisoformat(f.read().strip())
-        if now - last_cleanup_time < timedelta(days=CLEANUP_INTERVAL_DAYS): return
+        try:
+            with open(LAST_CLEANUP_FILE, 'r') as f:
+                last_cleanup_time = datetime.fromisoformat(f.read().strip())
+            if now - last_cleanup_time < timedelta(days=CLEANUP_INTERVAL_DAYS): return
+        except Exception:
+            pass # 如果文件有问题，则继续执行
     app.logger.info(f"开始执行定时邮件清理任务...")
     conn = get_db_conn()
     deleted_count = conn.execute(f"DELETE FROM received_emails WHERE id NOT IN (SELECT id FROM received_emails ORDER BY id DESC LIMIT {EMAILS_TO_KEEP})").rowcount
@@ -273,6 +273,8 @@ def run_cleanup_if_needed():
     conn.close()
     if deleted_count > 0: app.logger.info(f"清理完成，成功删除了 {deleted_count} 封旧邮件。")
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
+
+# ... 其他核心函数 (process_email_data, extract_code_from_body, 等) 保持不变 ...
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
@@ -338,6 +340,9 @@ def strip_tags_for_preview(html_content):
     if not html_content: return ""
     text_content = re.sub(r'<style.*?</style>|<script.*?</script>|<[^>]+>', ' ', html_content, flags=re.S)
     return re.sub(r'\s+', ' ', text_content).strip()
+
+
+# === 修改: 认证和路由函数 ===
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -406,16 +411,32 @@ def login():
 def logout():
     session.clear(); return redirect(url_for('login'))
 
-# === 修改: 发送邮件的路由和页面, 适配 SendGrid API ===
+# === 修改: 发件函数，使用 SendGrid SMTP ===
+def send_email_via_smtp(to_address, subject, body):
+    if not SMTP_PASSWORD:
+        return False, "SendGrid API密钥未配置，无法发送邮件。"
+
+    msg = MIMEText(body, 'plain', 'utf-8')
+    msg['Subject'] = Header(subject, 'utf-8')
+    msg['From'] = DEFAULT_SENDER
+    msg['To'] = to_address
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True, f"邮件已通过 SendGrid 成功发送至 {to_address}"
+    except Exception as e:
+        app.logger.error(f"通过 SendGrid SMTP 发送邮件失败: {e}")
+        return False, f"邮件发送失败: {e}"
+
+# === 修改: 发件页面路由，调用新的发件函数 ===
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
-    if not SENDGRID_API_KEY:
-        flash('SendGrid API密钥未配置，无法发送邮件。请在/opt/mail_api/app.py文件中配置。', 'error')
-        return redirect(url_for('index'))
-
     if request.method == 'POST':
-        to_address = request.form.get('to_address')
+        to_address = request.form.get('to')
         subject = request.form.get('subject')
         body = request.form.get('body')
         
@@ -423,26 +444,60 @@ def compose_email():
             flash('收件人和主题不能为空！', 'error')
             return redirect(url_for('compose_email'))
         
-        message = Mail(
-            from_email=SENDGRID_FROM_EMAIL,
-            to_emails=to_address,
-            subject=subject,
-            plain_text_content=body)
+        success, message = send_email_via_smtp(to_address, subject, body)
+        flash(message, 'success' if success else 'error')
         
-        try:
-            sg = SendGridAPIClient(SENDGRID_API_KEY)
-            response = sg.send(message)
-            if response.status_code >= 200 and response.status_code < 300:
-                 flash(f'邮件已通过 SendGrid 成功发送至 {to_address}', 'success')
-            else:
-                 flash(f'SendGrid 返回错误: {response.status_code} {response.body}', 'error')
-                 app.logger.error(f"SendGrid Error: {response.status_code} Body: {response.body}")
-        except Exception as e:
-            app.logger.error(f"发送邮件失败: {e}")
-            flash(f'通过 SendGrid 发送邮件失败: {e}', 'error')
-        
-        return redirect(url_for('compose_email'))
+        if success:
+            return redirect(url_for('index'))
+        else:
+            # 如果发送失败，保留用户输入的内容
+            return render_template_string('''
+                <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
+                    .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                    h2 { color: #333; }
+                    a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
+                    form { margin-top: 1.5em; }
+                    .form-group { margin-bottom: 1em; }
+                    label { display: block; margin-bottom: .5em; color: #555; }
+                    input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+                    input[readonly] { background-color: #e9ecef; }
+                    textarea { height: 200px; resize: vertical; }
+                    button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
+                    button:hover { background-color: #0056b3; }
+                    .flash-success { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+                    .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+                    .nav-link { font-size: 1.2em; }
+                </style></head><body><div class="container">
+                <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件 (通过 SendGrid SMTP)</h2>
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% for category, message in messages %}
+                        <div class="flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endwith %}
+                <form method="post">
+                    <div class="form-group">
+                        <label for="from_address">发件人:</label>
+                        <input type="text" id="from_address" name="from_address" value="{{ from_email }}" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="to">收件人:</label>
+                        <input type="email" id="to" name="to" value="{{ to_address }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="subject">主题:</label>
+                        <input type="text" id="subject" name="subject" value="{{ subject }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="body">正文:</label>
+                        <textarea id="body" name="body" required>{{ body }}</textarea>
+                    </div>
+                    <button type="submit">发送邮件</button>
+                </form>
+                </div></body></html>
+            ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, to_address=to_address, subject=subject, body=body)
 
+    # GET request: 显示一个空的表单
     return render_template_string('''
         <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
@@ -452,16 +507,15 @@ def compose_email():
             form { margin-top: 1.5em; }
             .form-group { margin-bottom: 1em; }
             label { display: block; margin-bottom: .5em; color: #555; }
-            input[type="text"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+            input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
             input[readonly] { background-color: #e9ecef; }
             textarea { height: 200px; resize: vertical; }
             button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
             button:hover { background-color: #0056b3; }
-            .flash-success { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
             .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
             .nav-link { font-size: 1.2em; }
         </style></head><body><div class="container">
-        <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件 (通过 SendGrid)</h2>
+        <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件 (通过 SendGrid SMTP)</h2>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% for category, message in messages %}
                 <div class="flash-{{ category }}">{{ message }}</div>
@@ -469,12 +523,12 @@ def compose_email():
         {% endwith %}
         <form method="post">
             <div class="form-group">
-                <label for="from_address">发件人 (由SendGrid配置):</label>
+                <label for="from_address">发件人:</label>
                 <input type="text" id="from_address" name="from_address" value="{{ from_email }}" readonly>
             </div>
             <div class="form-group">
-                <label for="to_address">收件人:</label>
-                <input type="text" id="to_address" name="to_address" required>
+                <label for="to">收件人:</label>
+                <input type="email" id="to" name="to" required>
             </div>
             <div class="form-group">
                 <label for="subject">主题:</label>
@@ -482,12 +536,12 @@ def compose_email():
             </div>
             <div class="form-group">
                 <label for="body">正文:</label>
-                <textarea id="body" name="body"></textarea>
+                <textarea id="body" name="body" required></textarea>
             </div>
             <button type="submit">发送邮件</button>
         </form>
         </div></body></html>
-    ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=SENDGRID_FROM_EMAIL)
+    ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER)
 
 # --- 邮件列表等其他视图函数保持不变 ---
 def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
@@ -625,7 +679,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
         </body></html>
     ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context)
 
-# 以下是所有剩余的路由，保持不变
+# ... 剩余的所有路由函数 (view_emails, admin_view, view_email_detail, etc.) 保持原样 ...
 @app.route('/view')
 @login_required
 def view_emails():
@@ -868,9 +922,8 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    # === 新增: 替换 SendGrid 的占位符 ===
+    # === 修改: 只替换 SendGrid 的 API Key ===
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SENDGRID_FROM_EMAIL_#${SENDGRID_FROM_EMAIL}#g" "${PROJECT_DIR}/app.py"
     
     ${PROJECT_DIR}/venv/bin/python3 -c "from app import init_db; init_db()"
     systemctl daemon-reload
