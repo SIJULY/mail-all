@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮件服务器一键安装脚本 
+# 小龙女她爸邮件服务器一键安装脚本 (Caddy整合终极版 - 增加Python版本兼容)
 #
-# 作者: 小龙女她爸 
+# 作者: 小龙女她爸
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -145,7 +145,7 @@ install_server() {
     else
         IS_UPDATE=false
         echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮件服务器一键安装脚本！${NC}"
-        EXISTING_TITLE="小龙女她爸邮件服务器系统"
+        EXISTING_TITLE="小龙女她爸邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
@@ -196,7 +196,19 @@ install_server() {
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-    ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
+    
+    # === 修复: 增加Python版本兼容性处理 ===
+    PIP_CMD="${PROJECT_DIR}/venv/bin/pip"
+    PYTHON_VERSION=$(${PROJECT_DIR}/venv/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    
+    echo -e "${BLUE}>>> Python 版本为 ${PYTHON_VERSION}。正在安装依赖...${NC}"
+    $PIP_CMD install flask gunicorn aiosmtpd werkzeug
+    
+    if [[ $(echo "$PYTHON_VERSION < 3.9" | bc) -eq 1 ]]; then
+        echo -e "${YELLOW}>>> 检测到 Python 版本低于 3.9，正在安装 zoneinfo 兼容包...${NC}"
+        $PIP_CMD install backports.zoneinfo
+    fi
+
 
     if [ -n "$ADMIN_PASSWORD" ]; then
         echo -e "${BLUE}>>> 正在为您设置新的管理员密码...${NC}"
@@ -227,7 +239,10 @@ from email.utils import parseaddr
 from email.mime.text import MIMEText
 from markupsafe import escape
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 from werkzeug.security import check_password_hash, generate_password_hash
 import asyncio
 from aiosmtpd.controller import Controller
@@ -291,8 +306,6 @@ def run_cleanup_if_needed():
     conn.close()
     if deleted_count > 0: app.logger.info(f"清理完成，成功删除了 {deleted_count} 封旧邮件。")
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
-    
-# === 修改: process_email_data 函数增加IP地址过滤 ===
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
     
@@ -303,11 +316,10 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
-    # --- 新增的反垃圾邮件规则 ---
     if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
         if subject == SERVER_PUBLIC_IP or SERVER_PUBLIC_IP in subject:
             app.logger.warning(f"SPAM REJECTED: Subject contains server IP. From: {msg.get('From')}, Subject: '{subject}'")
-            return # 关键：提前退出，不处理也不保存此邮件
+            return
 
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
     app.logger.info(f"SMTP信封接收地址: {to_address}")
@@ -354,8 +366,6 @@ def process_email_data(to_address, raw_email_data):
     conn.close()
     app.logger.info(f"邮件已存入数据库")
     run_cleanup_if_needed()
-
-# ... (The rest of the Python code is identical to the previous version and remains unchanged) ...
 def extract_code_from_body(body_text):
     if not body_text: return None
     code_keywords = ['verification code', '验证码', '驗證碼', '検証コード', 'authentication code', 'your code is']
@@ -959,7 +969,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}小龙女她爸邮件服务器一键安装脚本 ${NC}"
+echo -e "${BLUE}小龙女她爸邮局服务系统一键脚本 (智能API终极版)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
