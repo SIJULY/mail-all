@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-#小龙女她爸邮件服务器一键安装脚本 
+#小龙女她爸的邮局服务系统
 #
-# 作者: 小龙女她爸
+# 作者: 小龙女她爸 (由 Gemini 增加功能并修正BUG)
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -133,7 +133,6 @@ setup_caddy_reverse_proxy() {
 
 # --- 安装/更新功能 ---
 install_server() {
-    # === 修复: 智能判断是全新安装还是更新 ===
     if [ -f "${PROJECT_DIR}/app.py" ]; then
         IS_UPDATE=true
         echo -e "${BLUE}>>> 检测到已有安装，进入更新模式...${NC}"
@@ -145,7 +144,7 @@ install_server() {
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
-        echo -e "${GREEN}>>> 欢迎使用轻量级邮件服务器一键安装脚本！${NC}"
+        echo -e "${GREEN}>>> 小龙女她爸的邮局服务系统！${NC}"
         EXISTING_TITLE="小龙女她爸的邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
@@ -179,6 +178,14 @@ install_server() {
     
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
     
+    echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
+    PUBLIC_IP=$(curl -s icanhazip.com || echo "127.0.0.1")
+    if [ -z "$PUBLIC_IP" ]; then
+        echo -e "${RED}错误：无法自动获取公网IP地址。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}服务器公网IP为: ${PUBLIC_IP}${NC}"
+
     handle_apt_locks
     echo -e "${GREEN}>>> 步骤 1: 更新系统并安装依赖...${NC}"
     apt-get update
@@ -234,6 +241,8 @@ ADMIN_USERNAME = "_PLACEHOLDER_ADMIN_USERNAME_"
 ADMIN_PASSWORD_HASH = "_PLACEHOLDER_ADMIN_PASSWORD_HASH_"
 SYSTEM_TITLE = "_PLACEHOLDER_SYSTEM_TITLE_"
 SPECIAL_VIEW_TOKEN = "2088"
+SERVER_PUBLIC_IP = "_PLACEHOLDER_SERVER_IP_"
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
@@ -249,8 +258,6 @@ handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
-# ... (The rest of the Python code is identical to the previous version and remains unchanged) ...
-# ... (It starts with get_db_conn() and ends with the asyncio loop) ...
 def get_db_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -284,8 +291,24 @@ def run_cleanup_if_needed():
     conn.close()
     if deleted_count > 0: app.logger.info(f"清理完成，成功删除了 {deleted_count} 封旧邮件。")
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
+    
+# === 修改: process_email_data 函数增加IP地址过滤 ===
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
+    
+    subject = ""
+    if msg['Subject']:
+        subject_raw, encoding = decode_header(msg['Subject'])[0]
+        if isinstance(subject_raw, bytes): subject = subject_raw.decode(encoding or 'utf-8', errors='ignore')
+        else: subject = str(subject_raw)
+    subject = subject.strip()
+
+    # --- 新增的反垃圾邮件规则 ---
+    if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
+        if subject == SERVER_PUBLIC_IP or SERVER_PUBLIC_IP in subject:
+            app.logger.warning(f"SPAM REJECTED: Subject contains server IP. From: {msg.get('From')}, Subject: '{subject}'")
+            return # 关键：提前退出，不处理也不保存此邮件
+
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
     app.logger.info(f"SMTP信封接收地址: {to_address}")
     final_recipient = None
@@ -314,11 +337,7 @@ def process_email_data(to_address, raw_email_data):
         elif from_addr and '@' in from_addr: final_sender = from_addr
     if not final_sender: final_sender = "unknown@sender.com"
     app.logger.info(f"最终解析结果: 发件人 -> {final_sender}, 收件人 -> {final_recipient}")
-    subject = ""
-    if msg['Subject']:
-        subject_raw, encoding = decode_header(msg['Subject'])[0]
-        if isinstance(subject_raw, bytes): subject = subject_raw.decode(encoding or 'utf-8', errors='ignore')
-        else: subject = str(subject_raw)
+    
     body, body_type = "", "text/plain"
     if msg.is_multipart():
         for part in msg.walk():
@@ -335,6 +354,8 @@ def process_email_data(to_address, raw_email_data):
     conn.close()
     app.logger.info(f"邮件已存入数据库")
     run_cleanup_if_needed()
+
+# ... (The rest of the Python code is identical to the previous version and remains unchanged) ...
 def extract_code_from_body(body_text):
     if not body_text: return None
     code_keywords = ['verification code', '验证码', '驗證碼', '検証コード', 'authentication code', 'your code is']
@@ -915,6 +936,7 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
     
     ${PROJECT_DIR}/venv/bin/python3 -c "from app import init_db; init_db()"
     systemctl daemon-reload
@@ -922,7 +944,6 @@ WantedBy=multi-user.target
     systemctl enable mail-smtp.service mail-api.service
 
     echo "================================================================"
-    PUBLIC_IP=$(curl -s icanhazip.com || echo "YOUR_SERVER_IP")
     echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
     echo "================================================================"
     echo ""
@@ -938,7 +959,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}小龙女她爸邮局服务系统${NC}"
+echo -e "${BLUE}小龙女她爸的邮局服务系统${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
