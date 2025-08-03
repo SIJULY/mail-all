@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================================
-# X脚本 - 轻量级邮件服务一键安装脚本
+# - 轻量级邮件服务一键安装脚本 (完整代码最终版)
 #
 # 功能: 自动部署基于Flask的邮件服务，并设置为系统后台服务。
-# 作者: 小龙女她爸
+# 作者: Gemini
 # 日期: 2025-08-02
 # =================================================================================
 
@@ -47,7 +47,7 @@ handle_apt_locks() {
 
 # --- 卸载功能 ---
 uninstall_server() {
-    echo -e "${YELLOW}警告：你确定要卸载 X脚本 邮件服务吗？${NC}"
+    echo -e "${YELLOW}警告：你确定要卸载 邮件服务吗？${NC}"
     read -p "请输入 'yes' 以确认卸载: " CONFIRM_UNINSTALL
     if [ "$CONFIRM_UNINSTALL" != "yes" ]; then
         echo "卸载已取消。"
@@ -61,13 +61,13 @@ uninstall_server() {
     echo -e "${BLUE}>>> 正在删除应用程序目录...${NC}"
     rm -rf ${PROJECT_DIR}
     systemctl daemon-reload
-    echo -e "${GREEN}✅ X脚本 邮件服务已成功卸载。${NC}"
+    echo -e "${GREEN}✅ 邮件服务已成功卸载。${NC}"
     exit 0
 }
 
 # --- 安装功能 ---
 install_server() {
-    echo -e "${GREEN}欢迎使用 X脚本 邮件服务一键安装脚本！${NC}"
+    echo -e "${GREEN}欢迎使用  小龙女她爸邮件服务一键安装脚本！${NC}"
     
     read -p "请输入您希望使用的网页后台端口 [默认为: 5000]: " WEB_PORT
     WEB_PORT=${WEB_PORT:-5000}
@@ -97,10 +97,10 @@ install_server() {
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-    ${PROJECT_DIR}/venv/bin/pip install Flask gunicorn Werkzeug zoneinfo pytz
+    ${PROJECT_DIR}/venv/bin/pip install Flask gunicorn Werkzeug pytz
     
     # --- 步骤 4: 写入核心应用代码 ---
-    echo -e "${GREEN}>>> 步骤 4: 写入您的 X脚本 核心代码到 app.py...${NC}"
+    echo -e "${GREEN}>>> 步骤 4: 写入您的 核心代码到 app.py...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 import sqlite3
 import re
@@ -494,7 +494,7 @@ def get_mail_content():
         messages = cursor.fetchall()
         for msg in messages:
             subject = msg['subject'] or ""
-            if any(keyword in subject.lower() for keyword in subject_keywords):
+            if any(keyword.lower() in subject.lower() for keyword in subject_keywords):
                 return Response(msg['body'], mimetype=f"{msg['body_type']}; charset=utf-8")
         return Response(f"❌ 未找到 <{mail_address_to_find}> 符合条件的邮件。", status=404)
     finally:
@@ -583,46 +583,190 @@ def admin_view():
     )
 
 def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, user_email, is_admin_view):
-    # This function needs the full HTML template from your X script.
-    # For this installer, I will use a simplified but functional version.
-    # You can replace this with your full template if needed.
-    
     view_endpoint = 'admin_view' if is_admin_view else 'view_emails'
-    title_text = f"Admin View ({total_emails} emails)" if is_admin_view else f"Inbox for {user_email} ({total_emails} emails)"
+    delete_selected_endpoint = 'admin_delete_selected_emails' if is_admin_view else 'delete_selected_emails'
+    delete_all_endpoint = 'admin_delete_all_emails' if is_admin_view else 'delete_all_emails'
+    title_text = f"管理员视图 (共 {total_emails} 封)" if is_admin_view else f"收件箱 ({user_email} - 共 {total_emails} 封)"
+    search_placeholder = "搜索所有邮件的主题或收件人..." if is_admin_view else "在当前邮箱中搜索主题..."
+    
+    processed_emails = []
+    beijing_tz = ZoneInfo("Asia/Shanghai")
+    for item in emails_data:
+        utc_ts = item['timestamp']
+        bjt_str = "N/A"
+        if utc_ts:
+            try:
+                utc_dt = datetime.strptime(utc_ts, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                bjt_str = utc_ts
+        
+        preview_text = ""
+        is_code = False
+        subject_lower = (item['subject'] or "").lower()
+        if any(s in subject_lower for s in ["verify your email", "验证您的电子邮件地址", "メールアドレスを検証してください"]):
+            body_for_code_extraction = strip_tags_for_preview(item['body']) if item['body_type'] and 'html' in item['body_type'] else item['body']
+            code = extract_code_from_body(body_for_code_extraction)
+            if code and len(code) == 6:
+                preview_text = code
+                is_code = True
+            else:
+                preview_text = strip_tags_for_preview(item['body'] or '')
+        else:
+            preview_text = strip_tags_for_preview(item['body'] or '')
 
-    email_rows = ""
-    for email in emails_data:
-        email_rows += f"""
-        <tr class="{'unread' if not email.get('is_read') else ''}">
-            <td><input type="checkbox" name="selected_ids" value="{email['id']}"></td>
-            <td>{email['timestamp']}</td>
-            <td>{escape(email['subject'])}</td>
-            <td>{escape(strip_tags_for_preview(email['body']))[:100]}...</td>
-            <td>{escape(email['recipient'])}</td>
-            <td>{escape(email['sender'])}</td>
-            <td><a href="/view_email/{email['id']}" target="_blank">View</a></td>
-        </tr>
+        _, sender_addr = parseaddr(item['sender'] or "")
+
+        processed_emails.append({
+            'id': item['id'],
+            'bjt_str': bjt_str,
+            'subject': item['subject'],
+            'preview_text': preview_text,
+            'is_code': is_code,
+            'recipient': item['recipient'],
+            'sender': sender_addr or item['sender'],
+            'is_read': item.get('is_read', 0)
+        })
+
+    return render_template_string(
         """
-
-    return render_template_string(f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>{title_text}</title></head>
-        <body>
-            <h1>{title_text}</h1>
-            <a href="{url_for('logout')}">Logout</a>
-            <!-- Simplified UI for brevity -->
-            <form method="POST" action="{url_for('delete_selected_emails' if not is_admin_view else 'admin_delete_selected_emails')}">
-                <table>
-                    <thead><tr><th>Select</th><th>Date</th><th>Subject</th><th>Preview</th><th>Recipient</th><th>Sender</th><th>Action</th></tr></thead>
-                    <tbody>{email_rows}</tbody>
-                </table>
-                <button type="submit">Delete Selected</button>
+        <!DOCTYPE html><html><head><title>{{ title_text }}</title>
+        <style>
+            body{font-family: sans-serif; margin: 2em;} 
+            .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1em; }
+            .page-header h2 { margin: 0; }
+            .header-actions a { margin-left: 1em; text-decoration: none; font-size: 0.9em; padding: 8px 12px; border-radius: 4px; color: white; }
+            .header-actions .add-user-button { background-color: #337ab7; }
+            .header-actions .manage-user-button { background-color: #5bc0de; }
+            .header-actions .logout-link { background-color: #d9534f; }
+            table{border-collapse: collapse; width: 100%; margin-top: 1em; table-layout: fixed;}
+            th, td{border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; word-wrap: break-word;}
+            tr.unread { font-weight: bold; }
+            th { background-color: #4CAF50; color: white; font-weight: normal; }
+            .actions-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1em; }
+            .actions-bar .left-actions .refresh-btn-wrapper { position: relative; display: inline-block; }
+            .actions-bar .left-actions button, .actions-bar .left-actions form button { padding: 8px 12px; cursor: pointer; margin-right: 1em; }
+            .notification-badge { position: absolute; top: -8px; right: 8px; background-color: red; color: white; border-radius: 50%; padding: 2px 6px; font-size: 12px; font-weight: bold; }
+            .actions-bar .right-actions a { background-color: #5cb85c; color: white; padding: 8px 12px; border-radius: 4px; text-decoration: none; font-size: 1em; }
+            .search-box { margin-bottom: 1em; }
+            .search-box input[type=text] {padding: 8px; width: 300px;} .search-box button {padding: 8px 12px; cursor: pointer;}
+            .pagination {text-align: center; padding: 1em 0;} .pagination a, .pagination strong { margin: 0 5px; text-decoration: none; padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px;}
+            .pagination strong { background-color: #4CAF50; color: white; border-color: #4CAF50; }
+            .preview{width: 100%; line-height: 1.4em; max-height: 2.8em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;}
+            .flash{padding: 1em; margin-bottom: 1em; border-radius: 5px; transition: opacity 0.5s ease;}
+            .flash.success{background-color: #d4edda; color: #155724;}
+            .flash.error{background-color: #f8d7da; color: #721c24;}
+        </style>
+        </head><body>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <div class="page-header">
+            <h2>{{ title_text }}，第 {{ page }}/{{ total_pages }} 页</h2>
+            <div class="header-actions">
+                {% if is_admin_view %}
+                    <a href="{{ url_for('add_user') }}" class="add-user-button">新建用户</a>
+                    <a href="{{ url_for('manage_users') }}" class="manage-user-button">管理用户</a>
+                {% endif %}
+                <a href="{{ url_for('logout') }}" class="logout-link">登出</a>
+            </div>
+        </div>
+        <div class="search-box">
+            <form method="GET" action="{{ url_for(view_endpoint) }}">
+                <input type="text" name="search" placeholder="{{ search_placeholder }}" value="{{ search_query | escape }}">
+                <button type="submit">搜索</button>
+                {% if search_query %}<a href="{{ url_for(view_endpoint) }}" style="margin-left:10px; text-decoration:underline; color:grey;">清空搜索</a>{% endif %}
             </form>
-        </body>
-        </html>
-    """, **locals())
-
+        </div>
+        <div class="actions-bar">
+            <div class="left-actions">
+                <div class="refresh-btn-wrapper">
+                    <button id="refresh-button" onclick="location.href='{{ url_for(view_endpoint, page=page, search=search_query) }}'">刷新收件箱</button>
+                </div>
+                <form method="POST" action="{{ url_for(delete_all_endpoint) }}" style="display: inline;" onsubmit="return confirm('您确定要删除这些邮件吗？');"><button type="submit">删除所有邮件</button></form>
+            </div>
+            <div class="right-actions">
+                 <a href="{{ url_for('compose_email') }}">创建新邮件</a>
+            </div>
+        </div>
+        <form method="POST" action="{{ url_for(delete_selected_endpoint) }}?page={{ page }}&search={{ search_query }}">
+        <table><thead><tr>
+            <th style="width: 3%; text-align: center;"><input type="checkbox" onclick="toggleAll(this);"></th>
+            <th style="width: 15%;">时间 (北京)</th><th style="width: 20%;">主题</th><th style="width: 30%;">内容预览</th>
+            <th style="width: 15%;">收件人</th><th style="width: 12%;">发件人</th>
+            <th style="width: 5%; text-align: center;">查看邮件</th>
+        </tr></thead><tbody>
+        {% if not processed_emails %}
+            <tr><td colspan="7" style="text-align:center;">没有找到邮件。</td></tr>
+        {% else %}
+            {% for item in processed_emails %}
+            <tr class="{{ 'unread' if not item.is_read else '' }}">
+                <td style="text-align: center;"><input type="checkbox" name="selected_ids" value="{{ item.id }}"></td>
+                <td>{{ item.bjt_str | escape }}</td><td>{{ item.subject | escape }}</td>
+                <td>
+                    {% if item.is_code %}
+                        <strong style="color: red;">{{ item.preview_text | escape }}</strong>
+                    {% else %}
+                        <div class='preview'>{{ item.preview_text | escape }}</div>
+                    {% endif %}
+                </td>
+                <td>{{ item.recipient | escape }}</td><td>{{ item.sender | escape }}</td>
+                <td style="text-align: center;"><a href="{{ url_for('view_email_detail', email_id=item.id) }}" target="_blank">查看</a></td>
+            </tr>
+            {% endfor %}
+        {% endif %}
+        </tbody></table>
+        {% if processed_emails %}<div class="actions" style="margin-top: 1em;"><button type="submit" style="padding: 8px 12px; cursor: pointer;">删除选中邮件</button></div>{% endif %}
+        </form>
+        <div class="pagination">
+        {% if total_pages > 1 %}
+            {% if page > 1 %}<a href="{{ url_for(view_endpoint, page=page-1, search=search_query) }}">&laquo; 上一页</a>{% endif %}
+            {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}<strong>{{ p }}</strong>
+                {% else %}<a href="{{ url_for(view_endpoint, page=p, search=search_query) }}">{{ p }}</a>{% endif %}
+            {% endfor %}
+            {% if page < total_pages %}<a href="{{ url_for(view_endpoint, page=page+1, search=search_query) }}">下一页 &raquo;</a>{% endif %}
+        {% endif %}
+        </div>
+        <script>
+            function toggleAll(source) { checkboxes = document.getElementsByName('selected_ids'); for(var c of checkboxes) c.checked = source.checked; }
+            document.addEventListener('DOMContentLoaded', function() {
+                const refreshBtnWrapper = document.querySelector('.refresh-btn-wrapper');
+                function fetchUnreadCount() {
+                    fetch('{{ url_for('unread_count') }}')
+                        .then(response => response.json())
+                        .then(data => {
+                            let badge = refreshBtnWrapper.querySelector('.notification-badge');
+                            if (data.unread_count > 0) {
+                                if (!badge) {
+                                    badge = document.createElement('span');
+                                    badge.className = 'notification-badge';
+                                    refreshBtnWrapper.appendChild(badge);
+                                }
+                                badge.textContent = data.unread_count;
+                            } else { if (badge) { badge.remove(); } }
+                        })
+                        .catch(error => console.error('Error fetching unread count:', error));
+                }
+                fetchUnreadCount();
+                setInterval(fetchUnreadCount, 15000);
+                const flashMessages = document.querySelectorAll('.flash');
+                flashMessages.forEach(function(message) {
+                    setTimeout(function() {
+                        message.style.opacity = '0';
+                        setTimeout(function() { message.style.display = 'none'; }, 500);
+                    }, 5000);
+                });
+            });
+        </script>
+        </body></html>
+        """, **locals()
+    )
+    
 @app.route('/view_email/<int:email_id>')
 @login_required
 def view_email_detail(email_id):
@@ -633,137 +777,340 @@ def view_email_detail(email_id):
         email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
     else:
         email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND recipient = ?", (email_id, user_email)).fetchone()
-    
     if not email:
         conn.close()
         return "邮件未找到或您无权查看。", 404
-
     conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,))
     conn.commit()
     conn.close()
-
     _, sender_address = parseaddr(email['sender'])
     can_reply = '@' in (sender_address or '')
-
     body_content = email['body'] or ''
-    
     if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%; height: calc(100vh - 51px); border: none;"></iframe>'
+        email_display = f'<iframe srcdoc="{html.escape(body_content)}"></iframe>'
     else:
         email_display = f'<pre style="white-space: pre-wrap; word-wrap: break-word; padding: 1em;">{escape(body_content)}</pre>'
-
-    return Response(f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>View Email</title>
-        </head>
-        <body>
-            <div><a href="{url_for('compose_email', reply_to_id=email['id'])}">Reply</a></div>
-            {email_display}
-        </body>
-        </html>
-    """, mimetype="text/html; charset=utf-8")
+    final_html = f"""
+    <!DOCTYPE html><html><head><title>查看邮件: {escape(email['subject'])}</title>
+    <style>
+        body {{ font-family: sans-serif; margin: 0; }}
+        .top-bar {{ background-color: #f5f5f5; padding: 10px 20px; border-bottom: 1px solid #ddd; display: flex; align-items: center; justify-content: flex-end; }}
+        .top-bar a {{ background-color: #4CAF50; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; }}
+        .top-bar a.disabled {{ background-color: #ccc; cursor: not-allowed; }}
+        .email-body-container {{ height: calc(100vh - 51px); overflow-y: auto; }}
+        iframe {{ width: 100%; height: 100%; border: none; }}
+    </style>
+    </head><body>
+    <div class="top-bar">
+        {'<a href="' + url_for('compose_email', reply_to_id=email['id']) + '">回复邮件</a>' if can_reply else '<a href="#" class="disabled" title="无法识别有效的发件人地址">无法回复</a>'}
+    </div><div class="email-body-container">{email_display}</div></body></html>
+    """
+    return Response(final_html, mimetype="text/html; charset=utf-8")
 
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
-    form_data = {}
+    form_data = {} 
     if request.method == 'POST':
         to = request.form.get('to')
         subject = request.form.get('subject')
         body = request.form.get('body')
         if not to or not subject or not body:
-            flash("To, Subject, and Body are required.", 'error')
+            flash("收件人、主题和内容都不能为空！", 'error')
             form_data = {'to': to, 'subject': subject, 'body': body}
         else:
             success, message = send_email(to, subject, body)
             flash(message, 'success' if success else 'error')
-            if success:
-                return redirect(url_for('view_emails'))
+            if success: 
+                return redirect(url_for('admin_view') if session.get('is_admin') else url_for('view_emails'))
             else:
                 form_data = {'to': to, 'subject': subject, 'body': body}
-    
-    # Pre-fill for reply
     reply_to_id = request.args.get('reply_to_id')
     if reply_to_id:
-        # Simplified pre-fill logic
-        form_data['subject'] = "Re: " 
-        form_data['body'] = "\\n\\n--- Original Message ---"
-
-    return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Compose Email</title></head>
-        <body>
-            <form method="POST">
-                <input name="to" placeholder="To" value="{{ form_data.get('to', '') }}"><br>
-                <input name="subject" placeholder="Subject" value="{{ form_data.get('subject', '') }}"><br>
-                <textarea name="body">{{ form_data.get('body', '') }}</textarea><br>
-                <button type="submit">Send</button>
-            </form>
-        </body>
-        </html>
-    """, form_data=form_data)
+        try:
+            conn = get_db_conn()
+            query = "SELECT * FROM received_emails WHERE id = ?"
+            params = [reply_to_id]
+            if not session.get('is_admin'):
+                query += " AND recipient = ?"
+                params.append(session['user_email'])
+            original_email = conn.execute(query, params).fetchone()
+            conn.close()
+            if original_email:
+                _, parsed_sender = parseaddr(original_email['sender'])
+                form_data['to'] = parsed_sender or ''
+                original_subject = original_email['subject'] or ""
+                form_data['subject'] = "Re: " + original_subject if not original_subject.lower().startswith('re:') else original_subject
+                beijing_tz = ZoneInfo("Asia/Shanghai")
+                utc_dt = datetime.strptime(original_email['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
+                body_content = strip_tags_for_preview(original_email['body'] or '')
+                quoted_text = "\n".join([f"> {line}" for line in body_content.splitlines()])
+                form_data['body'] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
+        except Exception as e:
+            app.logger.error(f"Error pre-filling reply: {e}")
+            flash("无法加载原始邮件以供回复。", 'error')
+    
+    compose_html = """
+        <!DOCTYPE html><html><head><title>创建新邮件</title>
+        <style>
+            body{font-family: sans-serif; margin: 2em;} .container{max-width: 800px; margin: auto;}
+            a {color: #4CAF50; text-decoration:none; margin-bottom: 1em; display: inline-block;}
+            label{display: block; margin-top: 1em;} input, textarea{width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;}
+            textarea{height: 250px; resize: vertical;} button{margin-top: 1em; padding: 10px 15px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 4px;}
+            .flash{padding: 1em; margin-bottom: 1em; border-radius: 5px;}
+            .flash.success{background-color: #d4edda; color: #155724;}
+            .flash.error{background-color: #f8d7da; color: #721c24;}
+        </style>
+        </head><body><div class="container">
+        <p><a href="{{ url_for('view_emails') if not session.get('is_admin') else url_for('admin_view') }}">&laquo; 返回收件箱</a></p>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="POST">
+            <label for="to">收件人:</label><input type="email" id="to" name="to" required value="{{ form_data.get('to', '') }}">
+            <label for="subject">主题:</label><input type="text" id="subject" name="subject" required value="{{ form_data.get('subject', '') }}">
+            <label for="body">正文:</label><textarea id="body" name="body" required>{{ form_data.get('body', '') }}</textarea>
+            <button type="submit">发送邮件</button>
+        </form>
+        </div></body></html>
+    """
+    return render_template_string(compose_html, form_data=form_data, session=session)
 
 @app.route('/add_user', methods=['GET', 'POST'])
 @login_required
 @admin_required
 def add_user():
     if request.method == 'POST':
-        # Simplified logic
-        flash("User added (simulated).", 'success')
-        return redirect(url_for('manage_users'))
-    return "<h1>Add User</h1><form method=post><input name=email placeholder=Email><input type=password name=password><button type=submit>Add</button></form>"
+        email = request.form.get('email')
+        password = request.form.get('password')
+        password_confirm = request.form.get('password_confirm')
+        if not email or not password or not password_confirm:
+            flash("邮箱和密码不能为空！", 'error')
+        elif password != password_confirm:
+            flash("两次输入的密码不匹配！", 'error')
+        else:
+            try:
+                conn = get_db_conn()
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
+                conn.commit()
+                flash(f"用户 '{escape(email)}' 添加成功。", 'success')
+                return redirect(url_for('manage_users'))
+            except sqlite3.IntegrityError:
+                flash(f"错误：用户 '{escape(email)}' 已存在。", 'error')
+            finally:
+                if conn: conn.close()
+    
+    return render_template_string("""
+        <!DOCTYPE html><html><head><title>新建用户</title>
+        <style>
+            body{font-family: sans-serif; margin: 2em;} .container{max-width: 800px; margin: auto;}
+            a {color: #4CAF50; text-decoration:none; margin-bottom: 1em; display: inline-block;}
+            label{display: block; margin-top: 1em;} input{width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;}
+            button{margin-top: 1em; padding: 10px 15px; cursor: pointer; background-color: #337ab7; color: white; border: none; border-radius: 4px;}
+            .flash{padding: 1em; margin-bottom: 1em; border-radius: 5px;}
+            .flash.success{background-color: #d4edda; color: #155724;}
+            .flash.error{background-color: #f8d7da; color: #721c24;}
+        </style>
+        </head><body><div class="container">
+        <p><a href="{{ url_for('manage_users') }}">&laquo; 返回用户管理</a></p>
+        <h2>新建用户</h2>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="POST">
+            <label for="email">新用户邮箱地址:</label><input type="email" id="email" name="email" required>
+            <label for="password">密码:</label><input type="password" id="password" name="password" required>
+            <label for="password_confirm">确认密码:</label><input type="password" id="password_confirm" name="password_confirm" required>
+            <button type="submit">创建用户</button>
+        </form>
+        </div></body></html>
+    """, get_flashed_messages=get_flashed_messages)
 
 @app.route('/manage_users', methods=['GET'])
 @login_required
 @admin_required
 def manage_users():
-    return "<h1>Manage Users</h1><p>User list here.</p>"
+    conn = get_db_conn()
+    users = conn.execute("SELECT id, email FROM users WHERE email != ?", (ADMIN_USERNAME,)).fetchall()
+    conn.close()
+    
+    return render_template_string("""
+    <!DOCTYPE html><html><head><title>管理用户</title>
+    <style>
+        body{font-family: sans-serif; margin: 2em;} .container{max-width: 960px; margin: auto;}
+        a {color: #4CAF50; text-decoration:none; margin-bottom: 1em; display: inline-block;}
+        table{border-collapse: collapse; width: 100%; margin-top: 1em;}
+        th, td{border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: middle;}
+        th{background-color: #5bc0de; color: white;}
+        .flash{padding: 1em; margin-bottom: 1em; border-radius: 5px;}
+        .flash.success{background-color: #d4edda; color: #155724;}
+        .flash.error{background-color: #f8d7da; color: #721c24;}
+        .action-form { display: inline-block; margin-left: 10px; }
+        .action-form input[type=password] { padding: 6px; width: 150px; }
+        .action-form button { padding: 6px 10px; cursor: pointer; }
+        .delete-btn { background-color: #d9534f; color: white; border: none; }
+        .change-pwd-btn { background-color: #f0ad4e; color: white; border: none; }
+    </style>
+    </head><body><div class="container">
+    <p><a href="{{ url_for('admin_view') }}">&laquo; 返回管理员视图</a></p>
+    <h2>管理用户</h2>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    <table>
+        <thead><tr><th>用户邮箱</th><th style="width: 45%;">操作</th></tr></thead>
+        <tbody>
+        {% for user in users %}
+        <tr>
+            <td>{{ user.email | escape }}</td>
+            <td>
+                <form class="action-form" method="POST" action="{{ url_for('change_password', user_id=user.id) }}" onsubmit="return confirm('您确定要修改这个用户的密码吗？');">
+                    <input type="password" name="new_password" placeholder="输入新密码" required>
+                    <button type="submit" class="change-pwd-btn">更改密码</button>
+                </form>
+                <form class="action-form" method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" onsubmit="return confirm('警告：删除用户将不可恢复，确定吗？');">
+                    <button type="submit" class="delete-btn">删除用户</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="2" style="text-align:center;">没有其他用户。</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div></body></html>
+    """, users=users, get_flashed_messages=get_flashed_messages, escape=escape)
 
 @app.route('/delete_user/<int:user_id>', methods=['POST'])
 @login_required
 @admin_required
 def delete_user(user_id):
-    flash(f"User {user_id} deleted (simulated).", 'success')
+    try:
+        conn = get_db_conn()
+        user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user and user['email'] != ADMIN_USERNAME:
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+            flash(f"用户 '{escape(user['email'])}' 已被成功删除。", 'success')
+        else:
+            flash("无法删除该用户。", 'error')
+    except Exception as e:
+        flash(f"删除用户时出错: {e}", 'error')
+    finally:
+        if 'conn' in locals() and conn: conn.close()
     return redirect(url_for('manage_users'))
 
 @app.route('/change_password/<int:user_id>', methods=['POST'])
 @login_required
 @admin_required
 def change_password(user_id):
-    flash(f"Password for user {user_id} changed (simulated).", 'success')
+    new_password = request.form.get('new_password')
+    if not new_password:
+        flash("新密码不能为空！", 'error')
+        return redirect(url_for('manage_users'))
+    
+    try:
+        conn = get_db_conn()
+        user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user and user['email'] != ADMIN_USERNAME:
+            password_hash = generate_password_hash(new_password)
+            conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+            conn.commit()
+            flash(f"用户 '{escape(user['email'])}' 的密码已更新。", 'success')
+        else:
+            flash("无法修改该用户的密码。", 'error')
+    except Exception as e:
+        flash(f"更新密码时出错: {e}", 'error')
+    finally:
+        if 'conn' in locals() and conn: conn.close()
     return redirect(url_for('manage_users'))
 
 @app.route('/delete_selected_emails', methods=['POST'])
 @login_required
 def delete_selected_emails():
-    # Simplified
-    return redirect(url_for('view_emails'))
+    user_email = session['user_email']
+    ids = request.form.getlist('selected_ids')
+    search = request.args.get('search', '')
+    page = request.args.get('page', 1, type=int)
+    if ids:
+        try:
+            conn = get_db_conn()
+            cursor = conn.cursor()
+            placeholders = ','.join('?'*len(ids))
+            query = f"DELETE FROM received_emails WHERE id IN ({placeholders}) AND recipient = ?"
+            cursor.execute(query, ids + [user_email])
+            conn.commit()
+            flash(f"成功删除 {len(ids)} 封邮件。", "success")
+        finally:
+            if conn: conn.close()
+    return redirect(url_for('view_emails', search=search, page=page))
 
 @app.route('/delete_all_emails', methods=['POST'])
 @login_required
 def delete_all_emails():
-    # Simplified
+    user_email = session['user_email']
+    try:
+        conn = get_db_conn()
+        cursor = conn.cursor()
+        deleted_rows = cursor.execute("DELETE FROM received_emails WHERE recipient = ?", (user_email,)).rowcount
+        conn.commit()
+        flash(f"已删除全部 {deleted_rows} 封邮件。", "success")
+    finally:
+        if conn: conn.close()
     return redirect(url_for('view_emails'))
 
 @app.route('/admin_delete_selected_emails', methods=['POST'])
 @login_required
 @admin_required
 def admin_delete_selected_emails():
-    # Simplified
-    return redirect(url_for('admin_view'))
+    ids = request.form.getlist('selected_ids')
+    search = request.args.get('search', '')
+    page = request.args.get('page', 1, type=int)
+    if ids:
+        try:
+            conn = get_db_conn()
+            cursor = conn.cursor()
+            placeholders = ','.join('?'*len(ids))
+            query = f"DELETE FROM received_emails WHERE id IN ({placeholders})"
+            cursor.execute(query, ids)
+            conn.commit()
+            flash(f"成功删除 {len(ids)} 封邮件。", "success")
+        finally:
+            if conn: conn.close()
+    return redirect(url_for('admin_view', search=search, page=page))
 
 @app.route('/admin_delete_all_emails', methods=['POST'])
 @login_required
 @admin_required
 def admin_delete_all_emails():
-    # Simplified
+    try:
+        conn = get_db_conn()
+        cursor = conn.cursor()
+        deleted_rows = cursor.execute("DELETE FROM received_emails").rowcount
+        conn.commit()
+        flash(f"已清空数据库，共删除 {deleted_rows} 封邮件。", "success")
+    finally:
+        if conn: conn.close()
     return redirect(url_for('admin_view'))
 
 init_db()
 
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
 EOF
     
     # --- 步骤 5: 创建 systemd 服务文件 ---
@@ -794,20 +1141,24 @@ WantedBy=multi-user.target
 
     # --- 安装完成 ---
     echo "================================================================"
-    echo -e "${GREEN}🎉 恭喜！邮件服务安装完成！ 🎉${NC}"
+    echo -e "${GREEN}🎉 恭喜！ 邮件服务安装完成！ 🎉${NC}"
     echo "================================================================"
     echo ""
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    echo -e "注意：此脚本通过 /api/receive_email 接口接收邮件，"
-    echo -e "您需要配置其他邮件服务（如Postfix, Mailgun等）将邮件推送到此接口。"
+    echo -e "${RED}重要提示：此脚本的管理员账户和密码是硬编码在脚本内的。${NC}"
+    echo -e "管理员用户名: ${YELLOW}admin${NC}"
+    echo -e "管理员密码: ${YELLOW}050148Sq$${NC}"
+    echo ""
+    echo -e "${YELLOW}另外，此服务通过 /api/receive_email 接口接收邮件，${NC}"
+    echo -e "${YELLOW}您需要配置其他邮件服务（如Postfix, Mailgun等）将邮件转发到此接口。${NC}"
     echo "================================================================"
 }
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}轻量级邮件服务一键安装脚本${NC}"
+echo -e "${BLUE}轻量级邮件服务一键安装脚本 (修正版)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装 邮件服务"
