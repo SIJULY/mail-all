@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 )
+#小龙女她爸邮件服务器一键安装脚本 
 #
-# 作者: 小龙女她爸 
+# 作者: 小龙女她爸
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -133,13 +133,26 @@ setup_caddy_reverse_proxy() {
 
 # --- 安装/更新功能 ---
 install_server() {
-    echo -e "${GREEN}欢迎使用轻量级邮件服务器一键安装/更新脚本！${NC}"
-    
-    # --- 智能获取现有配置 ---
-    EXISTING_TITLE=$(grep -oP "SYSTEM_TITLE = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "轻量级邮件服务器")
-    EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
-    EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
-    EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+    # === 修复: 智能判断是全新安装还是更新 ===
+    if [ -f "${PROJECT_DIR}/app.py" ]; then
+        IS_UPDATE=true
+        echo -e "${BLUE}>>> 检测到已有安装，进入更新模式...${NC}"
+        EXISTING_TITLE=$(grep -oP "SYSTEM_TITLE = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "轻量级邮件服务器")
+        EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
+        EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
+        EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        API_PROMPT="请输入您的 SendGrid API 密钥 (留空则使用旧值): "
+        PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
+    else
+        IS_UPDATE=false
+        echo -e "${GREEN}>>> 欢迎使用轻量级邮件服务器一键安装脚本！${NC}"
+        EXISTING_TITLE="轻量级邮件服务器"
+        EXISTING_PORT="2099"
+        EXISTING_ADMIN="admin"
+        EXISTING_API_KEY=""
+        API_PROMPT="请输入您的 SendGrid API 密钥 (可留空): "
+        PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
+    fi
 
     read -p "请输入您想为本系统命名的标题 [默认为: ${EXISTING_TITLE}]: " SYSTEM_TITLE
     SYSTEM_TITLE=${SYSTEM_TITLE:-${EXISTING_TITLE}}
@@ -152,8 +165,8 @@ install_server() {
     fi
 
     echo "--- SendGrid SMTP 发件服务配置 ---"
-    read -p "请输入您的 SendGrid API 密钥 (留空则使用旧值): " SENDGRID_API_KEY
-    if [ -z "$SENDGRID_API_KEY" ]; then
+    read -p "$API_PROMPT" SENDGRID_API_KEY
+    if [ "$IS_UPDATE" = true ] && [ -z "$SENDGRID_API_KEY" ]; then
         SENDGRID_API_KEY=${EXISTING_API_KEY}
     fi
 
@@ -161,12 +174,11 @@ install_server() {
     read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
     ADMIN_USERNAME=${ADMIN_USERNAME:-${EXISTING_ADMIN}}
     
-    read -sp "请为管理员账户 '${ADMIN_USERNAME}' 设置登录密码 (留空则不修改): " ADMIN_PASSWORD
+    read -sp "$PW_PROMPT" ADMIN_PASSWORD
     echo
     
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
     
-    # --- 基础环境和依赖安装 ---
     handle_apt_locks
     echo -e "${GREEN}>>> 步骤 1: 更新系统并安装依赖...${NC}"
     apt-get update
@@ -179,12 +191,11 @@ install_server() {
     python3 -m venv venv
     ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
 
-    # === 修复: 密码处理逻辑 ===
     if [ -n "$ADMIN_PASSWORD" ]; then
         echo -e "${BLUE}>>> 正在为您设置新的管理员密码...${NC}"
         ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
     else
-        if [ -f "${PROJECT_DIR}/app.py" ]; then
+        if [ "$IS_UPDATE" = true ]; then
             ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null)
             if [ -z "$ADMIN_PASSWORD_HASH" ]; then
                  echo -e "${RED}错误：无法从现有文件中读取旧密码，请重新运行时设置一个新密码。${NC}"
@@ -238,6 +249,8 @@ handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
+# ... (The rest of the Python code is identical to the previous version and remains unchanged) ...
+# ... (It starts with get_db_conn() and ends with the asyncio loop) ...
 def get_db_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -871,14 +884,12 @@ EOF
     SMTP_SERVICE_CONTENT="[Unit]
 Description=Custom Python SMTP Server (Receive-Only)
 After=network.target
-
 [Service]
 User=root
 Group=root
 WorkingDirectory=${PROJECT_DIR}
 ExecStart=${PROJECT_DIR}/venv/bin/python3 ${PROJECT_DIR}/app.py
 Restart=always
-
 [Install]
 WantedBy=multi-user.target
 "
@@ -887,14 +898,12 @@ WantedBy=multi-user.target
     API_SERVICE_CONTENT="[Unit]
 Description=Gunicorn instance for Mail Web UI (Receive-Only)
 After=network.target
-
 [Service]
 User=root
 Group=root
 WorkingDirectory=${PROJECT_DIR}
 ExecStart=${PROJECT_DIR}/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:${WEB_PORT} 'app:app'
 Restart=always
-
 [Install]
 WantedBy=multi-user.target
 "
@@ -913,13 +922,14 @@ WantedBy=multi-user.target
     systemctl enable mail-smtp.service mail-api.service
 
     echo "================================================================"
+    PUBLIC_IP=$(curl -s icanhazip.com || echo "YOUR_SERVER_IP")
     echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
     echo "================================================================"
     echo ""
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    if [ -z "$SENDGRID_API_KEY" ]; then
+    if [ -z "$SENDGRID_API_KEY" ] && [ "$IS_UPDATE" = false ]; then
         echo -e "${YELLOW}提醒：您未在安装时提供SendGrid API密钥。${NC}"
         echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件，填入您的密钥。"
     fi
@@ -928,7 +938,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}轻量级邮件服务器一键脚本${NC}"
+echo -e "${BLUE}小龙女她爸邮局服务系统${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
