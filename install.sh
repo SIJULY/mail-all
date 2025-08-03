@@ -954,7 +954,7 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}轻量级邮件服务器一键脚本 (智能API终极版)${NC}"
+echo -e "${BLUE}轻量级邮件服务器一键安装脚本 (Caddy整合终极版 - SendGrid SMTP 发件)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装邮件服务器核心服务"
