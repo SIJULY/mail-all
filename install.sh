@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================================
-# 轻量级邮件服务器一键安装脚本 (Caddy整合终极版 )
+# 轻量级邮件服务器一键安装脚本 (终极版)
 #
-# 作者: 小龙女她爸 
+# 作者: 小龙女她爸
 # 日期: 2025-08-03
 # =================================================================================
 
@@ -98,7 +98,6 @@ setup_caddy_reverse_proxy() {
     read -p "请确认您的邮件服务Web后台端口 [默认为 ${WEB_PORT}]: " USER_WEB_PORT
     WEB_PORT=${USER_WEB_PORT:-${WEB_PORT}}
 
-    # === 修复: 使用规范、独立的文件进行配置 ===
     echo -e "${YELLOW}>>> 正在生成 Caddyfile 配置文件...${NC}"
     CADDYFILE_CONTENT="${DOMAIN_NAME} {
     encode gzip
@@ -106,17 +105,18 @@ setup_caddy_reverse_proxy() {
     tls ${LETSENCRYPT_EMAIL}
 }"
     
-    # 确保 conf.d 目录存在
     mkdir -p /etc/caddy/conf.d/
-    # 将配置写入独立的 mail_server.caddy 文件，使用覆盖模式
     echo "${CADDYFILE_CONTENT}" > /etc/caddy/conf.d/mail_server.caddy
     
-    # 确保主 Caddyfile 导入了我们的配置目录
     if ! grep -q "import /etc/caddy/conf.d/\*.caddy" /etc/caddy/Caddyfile; then
         echo -e "\nimport /etc/caddy/conf.d/*.caddy" >> /etc/caddy/Caddyfile
     fi
 
     echo -e "${YELLOW}>>> 正在重新加载 Caddy 服务以应用新配置...${NC}"
+    # 修复: 如果服务未运行，则启动它
+    if ! systemctl is-active --quiet caddy; then
+        systemctl start caddy
+    fi
     systemctl reload caddy
     
     echo "================================================================"
@@ -132,34 +132,40 @@ setup_caddy_reverse_proxy() {
 }
 
 
-# --- 安装功能 ---
+# --- 安装/更新功能 ---
 install_server() {
-    echo -e "${GREEN}欢迎使用轻量级邮件服务器一键安装脚本！${NC}"
+    echo -e "${GREEN}欢迎使用轻量级邮件服务器一键安装/更新脚本！${NC}"
     
-    read -p "请输入您想为本系统命名的标题 (例如: 我的私人邮箱): " SYSTEM_TITLE
-    SYSTEM_TITLE=${SYSTEM_TITLE:-"轻量级邮件服务器"}
+    # --- 智能获取现有配置 ---
+    EXISTING_TITLE=$(grep -oP "SYSTEM_TITLE = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "轻量级邮件服务器")
+    EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
+    EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
+    EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
 
-    read -p "请输入您希望使用的网页后台端口 [默认为: 2099]: " WEB_PORT
-    WEB_PORT=${WEB_PORT:-2099}
+    read -p "请输入您想为本系统命名的标题 [默认为: ${EXISTING_TITLE}]: " SYSTEM_TITLE
+    SYSTEM_TITLE=${SYSTEM_TITLE:-${EXISTING_TITLE}}
+
+    read -p "请输入您希望使用的网页后台端口 [默认为: ${EXISTING_PORT}]: " WEB_PORT
+    WEB_PORT=${WEB_PORT:-${EXISTING_PORT}}
     if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]] || [ "$WEB_PORT" -lt 1 ] || [ "$WEB_PORT" -gt 65535 ]; then
         echo -e "${RED}错误：端口号无效，请输入1-65535之间的数字。${NC}"
         exit 1
     fi
 
     echo "--- SendGrid SMTP 发件服务配置 ---"
-    echo -e "${YELLOW}本功能将使用 SendGrid SMTP 发送邮件。${NC}"
-    read -p "请输入您的 SendGrid API 密钥 (作为SMTP密码，可留空): " SENDGRID_API_KEY
+    read -p "请输入您的 SendGrid API 密钥 (留空则使用旧值): " SENDGRID_API_KEY
+    if [ -z "$SENDGRID_API_KEY" ]; then
+        SENDGRID_API_KEY=${EXISTING_API_KEY}
+    fi
 
     echo "--- 管理员账户设置 ---"
-    read -p "请输入管理员登录名 [默认为: admin]: " ADMIN_USERNAME
-    ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-    read -sp "请为管理员账户 '${ADMIN_USERNAME}' 设置一个复杂的登录密码: " ADMIN_PASSWORD
+    read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
+    ADMIN_USERNAME=${ADMIN_USERNAME:-${EXISTING_ADMIN}}
+    
+    # 密码需要特殊处理，仅当用户输入新密码时才更新
+    read -sp "请为管理员账户 '${ADMIN_USERNAME}' 设置登录密码 (留空则不修改): " ADMIN_PASSWORD
     echo
-    if [ -z "$ADMIN_PASSWORD" ]; then
-        echo -e "${RED}错误：管理员密码不能为空。${NC}"
-        exit 1
-    fi
-    echo
+    
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
     
     echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
@@ -191,7 +197,14 @@ install_server() {
     ${PROJECT_DIR}/venv/bin/pip install flask gunicorn aiosmtpd werkzeug
     
     echo -e "${GREEN}>>> 步骤 4: 写入核心应用代码 (app.py)...${NC}"
-    ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
+    # 仅当用户输入了新密码时，才生成新的密码哈希
+    if [ -n "$ADMIN_PASSWORD" ]; then
+        ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
+    else
+        # 否则，从旧文件中读取哈希值
+        ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "INVALID_HASH")
+    fi
+    
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
@@ -414,9 +427,12 @@ def send_email_via_smtp(to_address, subject, body):
     except Exception as e:
         app.logger.error(f"通过 SendGrid SMTP 发送邮件失败: {e}")
         return False, f"邮件发送失败: {e}"
+
+# === 修改: 增加回复功能逻辑 ===
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
+    form_data = {}
     if request.method == 'POST':
         to_address = request.form.get('to')
         subject = request.form.get('subject')
@@ -424,55 +440,51 @@ def compose_email():
         
         if not to_address or not subject:
             flash('收件人和主题不能为空！', 'error')
-            return redirect(url_for('compose_email'))
-        
-        success, message = send_email_via_smtp(to_address, subject, body)
-        flash(message, 'success' if success else 'error')
-        
-        if success:
-            return redirect(url_for('index'))
+            form_data = {'to': to_address, 'subject': subject, 'body': body} # 保存用户输入
         else:
-            return render_template_string('''
-                <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
-                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
-                    .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                    h2 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
-                    form { margin-top: 1.5em; } .form-group { margin-bottom: 1em; } label { display: block; margin-bottom: .5em; color: #555; }
-                    input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
-                    input[readonly] { background-color: #e9ecef; } textarea { height: 200px; resize: vertical; }
-                    button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
-                    button:hover { background-color: #0056b3; }
-                    .flash-success { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-                    .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-                    .nav-link { font-size: 1.2em; }
-                </style></head><body><div class="container">
-                <h2><a href="{{url_for('index')}}" class="nav-link">&larr; 返回收件箱</a> | 写新邮件 (通过 SendGrid SMTP)</h2>
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% for category, message in messages %}
-                        <div class="flash-{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                {% endwith %}
-                <form method="post">
-                    <div class="form-group">
-                        <label for="from_address">发件人:</label>
-                        <input type="text" id="from_address" name="from_address" value="{{ from_email }}" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label for="to">收件人:</label>
-                        <input type="email" id="to" name="to" value="{{ to_address }}" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="subject">主题:</label>
-                        <input type="text" id="subject" name="subject" value="{{ subject }}" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="body">正文:</label>
-                        <textarea id="body" name="body" required>{{ body }}</textarea>
-                    </div>
-                    <button type="submit">发送邮件</button>
-                </form>
-                </div></body></html>
-            ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, to_address=to_address, subject=subject, body=body)
+            success, message = send_email_via_smtp(to_address, subject, body)
+            flash(message, 'success' if success else 'error')
+            if success:
+                return redirect(url_for('index'))
+            else:
+                form_data = {'to': to_address, 'subject': subject, 'body': body} # 发送失败，依然保存
+
+    # 处理 GET 请求和回复逻辑
+    reply_to_id = request.args.get('reply_to_id')
+    if reply_to_id and not form_data: # 仅当不是POST失败时才加载回复
+        try:
+            conn = get_db_conn()
+            query = "SELECT * FROM received_emails WHERE id = ?"
+            params = [reply_to_id]
+            if not session.get('is_admin'):
+                query += " AND recipient = ?"
+                params.append(session['user_email'])
+            
+            original_email = conn.execute(query, params).fetchone()
+            conn.close()
+
+            if original_email:
+                _, parsed_sender = parseaddr(original_email['sender'])
+                form_data['to'] = parsed_sender or ''
+
+                original_subject = original_email['subject'] or ""
+                if not original_subject.lower().startswith('re:'):
+                    form_data['subject'] = "Re: " + original_subject
+                else:
+                    form_data['subject'] = original_subject
+
+                beijing_tz = ZoneInfo("Asia/Shanghai")
+                utc_dt = datetime.strptime(original_email['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
+                
+                body_content = strip_tags_for_preview(original_email['body'] or '')
+                quoted_text = "\\n".join([f"> {line}" for line in body_content.splitlines()])
+                form_data['body'] = f"\\n\\n\\n--- On {bjt_str}, {original_email['sender']} wrote: ---\\n{quoted_text}"
+
+        except Exception as e:
+            app.logger.error(f"加载回复邮件时出错: {e}")
+            flash("加载原始邮件以供回复时出错。", 'error')
+
     return render_template_string('''
         <!DOCTYPE html><html><head><title>写邮件 - {{SYSTEM_TITLE}}</title><style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
@@ -480,9 +492,10 @@ def compose_email():
             h2 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
             form { margin-top: 1.5em; } .form-group { margin-bottom: 1em; } label { display: block; margin-bottom: .5em; color: #555; }
             input[type="text"], input[type="email"], textarea { width: calc(100% - 22px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
-            input[readonly] { background-color: #e9ecef; } textarea { height: 200px; resize: vertical; }
+            input[readonly] { background-color: #e9ecef; } textarea { height: 250px; resize: vertical; }
             button { padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; background-color: #007bff; font-size: 1em; }
             button:hover { background-color: #0056b3; }
+            .flash-success { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
             .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
             .nav-link { font-size: 1.2em; }
         </style></head><body><div class="container">
@@ -499,20 +512,21 @@ def compose_email():
             </div>
             <div class="form-group">
                 <label for="to">收件人:</label>
-                <input type="email" id="to" name="to" required>
+                <input type="email" id="to" name="to" value="{{ form_data.get('to', '') }}" required>
             </div>
             <div class="form-group">
                 <label for="subject">主题:</label>
-                <input type="text" id="subject" name="subject" required>
+                <input type="text" id="subject" name="subject" value="{{ form_data.get('subject', '') }}" required>
             </div>
             <div class="form-group">
                 <label for="body">正文:</label>
-                <textarea id="body" name="body" required></textarea>
+                <textarea id="body" name="body" required>{{ form_data.get('body', '') }}</textarea>
             </div>
             <button type="submit">发送邮件</button>
         </form>
         </div></body></html>
-    ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER)
+    ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, form_data=form_data)
+
 def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
     if token_view_context:
         endpoint = 'view_mail_by_token'
@@ -719,6 +733,8 @@ def delete_all_emails():
     finally:
         if conn: conn.close()
     return redirect(url_for('admin_view'))
+
+# === 修改: 增加回复按钮的邮件详情页 ===
 @app.route('/view_email/<int:email_id>')
 @login_required
 def view_email_detail(email_id):
@@ -727,16 +743,40 @@ def view_email_detail(email_id):
         email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
     else:
         email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND recipient = ?", (email_id, session['user_email'])).fetchone()
-    if not email: conn.close(); return "邮件未找到或无权查看", 404
+    
+    if not email:
+        conn.close()
+        return "邮件未找到或无权查看", 404
+
     if not email['is_read']:
         conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
     conn.close()
+    
+    _, sender_address = parseaddr(email['sender'])
+    can_reply = '@' in (sender_address or '')
+
     body_content = email['body'] or ''
     if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
     else:
-        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
-    return Response(email_display, mimetype="text/html; charset=utf-8")
+        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
+    
+    reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>' if can_reply else '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
+
+    return render_template_string(f'''
+        <!DOCTYPE html><html><head><title>邮件详情</title>
+        <style>
+            body {{ margin: 0; font-family: sans-serif; }}
+            .top-bar {{ display: flex; align-items: center; justify-content: flex-start; padding: 8px 15px; background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }}
+            .btn {{ text-decoration: none; display: inline-block; padding: 8px 15px; border-radius: 4px; color: white; background-color: #007bff; transition: background-color 0.2s; }}
+            .btn:hover {{ background-color: #0056b3; }}
+            .btn.disabled {{ background-color: #6c757d; cursor: not-allowed; }}
+        </style></head><body>
+            <div class="top-bar">{reply_button_html}</div>
+            {email_display}
+        </body></html>
+    ''')
+
 @app.route('/view_email_token/<int:email_id>')
 def view_email_token_detail(email_id):
     token = request.args.get('token')
@@ -806,7 +846,7 @@ def manage_users():
             {% for user in users %}
             <li>
                 <span>{{user.email}}</span>
-                <form method="post" class="inline-form">
+                <form method="post" class="inline-form" onsubmit="return confirm('确定要删除该用户吗？');">
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="user_id" value="{{user.id}}">
                     <button type="submit" class="delete">删除</button>
@@ -874,7 +914,9 @@ WantedBy=multi-user.target
 
     echo -e "${GREEN}>>> 步骤 6: 替换占位符并启动服务...${NC}"
     sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
+    if [ -n "$ADMIN_PASSWORD" ]; then
+      sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
+    fi
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
@@ -885,7 +927,7 @@ WantedBy=multi-user.target
     systemctl enable mail-smtp.service mail-api.service
 
     echo "================================================================"
-    echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装完成！ 🎉${NC}"
+    echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
     echo "================================================================"
     echo ""
     echo -e "${RED}重要安全警告：${NC}"
@@ -894,9 +936,6 @@ WantedBy=multi-user.target
     echo "----------------------------------------------------------------"
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
-    echo ""
-    echo -e "邮件查看地址格式为 (注意替换{}中的内容):"
-    echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}/Mail?token=2088&mail={收件人邮箱地址}${NC}"
     echo ""
     if [ -z "$SENDGRID_API_KEY" ]; then
         echo -e "${YELLOW}提醒：您未在安装时提供SendGrid API密钥。${NC}"
@@ -907,10 +946,10 @@ WantedBy=multi-user.target
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE} 轻量级邮件服务器一键安装脚本 (Caddy整合终极版)${NC}"
+echo -e "${BLUE}轻量级邮件服务器一键安装脚本 (终极版)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
-echo "1) 安装邮件服务器核心服务"
+echo "1) 安装或更新邮件服务器核心服务"
 echo "2) 卸载邮件服务器核心服务"
 echo "3) 【可选】配置域名反代和SSL证书 (Caddy)"
 echo ""
