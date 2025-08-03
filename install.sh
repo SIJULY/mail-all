@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮件服务器一键安装脚本 (Caddy整合终极版 - 增加Python版本兼容)
+# 小龙女她爸邮件服务器一键安装脚本
 #
-# 作者: 小龙女她爸
-# 日期: 2025-08-03
+# 作者: 小龙女她爸 (由 Gemini 增加功能并修正BUG)
+# 日期: 2025-08-04
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -140,16 +140,20 @@ install_server() {
         EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
         EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_SENDER=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
         API_PROMPT="请输入您的 SendGrid API 密钥 (留空则使用旧值): "
+        SENDER_PROMPT="请输入您在SendGrid验证过的默认发件人邮箱 (留空则使用旧值): "
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
-        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮件服务器一键安装脚本！${NC}"
-        EXISTING_TITLE="小龙女她爸邮局服务系统"
+        echo -e "${GREEN}>>> 欢迎使用小龙女她爸邮件服务系统！${NC}"
+        EXISTING_TITLE="小龙女她爸邮件服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
+        EXISTING_SENDER=""
         API_PROMPT="请输入您的 SendGrid API 密钥 (可留空): "
+        SENDER_PROMPT="请输入您在SendGrid验证过的默认发件人邮箱 (可留空): "
         PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
     fi
 
@@ -165,8 +169,11 @@ install_server() {
 
     echo "--- SendGrid SMTP 发件服务配置 ---"
     read -p "$API_PROMPT" SENDGRID_API_KEY
-    if [ "$IS_UPDATE" = true ] && [ -z "$SENDGRID_API_KEY" ]; then
-        SENDGRID_API_KEY=${EXISTING_API_KEY}
+    read -p "$SENDER_PROMPT" DEFAULT_SENDER
+
+    if [ "$IS_UPDATE" = true ]; then
+        if [ -z "$SENDGRID_API_KEY" ]; then SENDGRID_API_KEY=${EXISTING_API_KEY}; fi
+        if [ -z "$DEFAULT_SENDER" ]; then DEFAULT_SENDER=${EXISTING_SENDER}; fi
     fi
 
     echo "--- 管理员账户设置 ---"
@@ -197,22 +204,21 @@ install_server() {
     cd $PROJECT_DIR
     python3 -m venv venv
     
-    # === 修复: 增加Python版本兼容性处理 ===
     PIP_CMD="${PROJECT_DIR}/venv/bin/pip"
-    PYTHON_VERSION=$(${PROJECT_DIR}/venv/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    PYTHON_CMD="${PROJECT_DIR}/venv/bin/python3"
+    PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     
     echo -e "${BLUE}>>> Python 版本为 ${PYTHON_VERSION}。正在安装依赖...${NC}"
     $PIP_CMD install flask gunicorn aiosmtpd werkzeug
     
-    if [[ $(echo "$PYTHON_VERSION < 3.9" | bc) -eq 1 ]]; then
+    if [[ $(echo "$PYTHON_VERSION < 3.9" | bc -l 2>/dev/null) -eq 1 ]]; then
         echo -e "${YELLOW}>>> 检测到 Python 版本低于 3.9，正在安装 zoneinfo 兼容包...${NC}"
-        $PIP_CMD install backports.zoneinfo
+        $PIP_CMD install 'backports.zoneinfo; python_version < "3.9"'
     fi
-
 
     if [ -n "$ADMIN_PASSWORD" ]; then
         echo -e "${BLUE}>>> 正在为您设置新的管理员密码...${NC}"
-        ADMIN_PASSWORD_HASH=$(${PROJECT_DIR}/venv/bin/python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
+        ADMIN_PASSWORD_HASH=$($PYTHON_CMD -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('''$ADMIN_PASSWORD'''))")
     else
         if [ "$IS_UPDATE" = true ]; then
             ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null)
@@ -265,7 +271,7 @@ SMTP_SERVER = "smtp.sendgrid.net"
 SMTP_PORT = 587
 SMTP_USERNAME = "apikey"
 SMTP_PASSWORD = "_PLACEHOLDER_SENDGRID_API_KEY_"
-DEFAULT_SENDER = "noreply@mail.sijuly.nyc.mn"
+DEFAULT_SENDER = "_PLACEHOLDER_DEFAULT_SENDER_"
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -448,8 +454,8 @@ def login():
 def logout():
     session.clear(); return redirect(url_for('login'))
 def send_email_via_smtp(to_address, subject, body):
-    if not SMTP_PASSWORD:
-        return False, "SendGrid API密钥未配置，无法发送邮件。"
+    if not SMTP_PASSWORD or not DEFAULT_SENDER:
+        return False, "发件功能未配置(缺少API密钥或发件人地址)。"
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = DEFAULT_SENDER
@@ -467,6 +473,10 @@ def send_email_via_smtp(to_address, subject, body):
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
+    if not SMTP_PASSWORD or not DEFAULT_SENDER:
+        flash('发件功能未配置。请在安装脚本中提供SendGrid API密钥和已验证的发件人邮箱。', 'error')
+        return redirect(url_for('index'))
+
     form_data = {}
     if request.method == 'POST':
         to_address = request.form.get('to')
@@ -569,6 +579,8 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
     
     processed_emails = []
     beijing_tz = ZoneInfo("Asia/Shanghai")
+    sending_enabled = bool(SMTP_PASSWORD and DEFAULT_SENDER)
+
     for item in emails_data:
         utc_dt = datetime.strptime(item['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
         bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
@@ -612,7 +624,9 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             <div class="top-bar">
                 <h2>{{title}}</h2>
                 <div class="user-actions">
+                    {% if sending_enabled %}
                     <a href="{{url_for('compose_email')}}" class="btn btn-primary">写邮件</a>
+                    {% endif %}
                     {% if not token_view_context and is_admin_view %}
                         <a href="{{url_for('manage_users')}}" class="btn btn-secondary">管理用户</a>
                     {% endif %}
@@ -680,7 +694,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
             }
         </script>
         </body></html>
-    ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context)
+    ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context, sending_enabled=sending_enabled)
 @app.route('/view')
 @login_required
 def view_emails():
@@ -919,7 +933,7 @@ After=network.target
 User=root
 Group=root
 WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PROJECT_DIR}/venv/bin/python3 ${PROJECT_DIR}/app.py
+ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
 Restart=always
 [Install]
 WantedBy=multi-user.target
@@ -927,7 +941,7 @@ WantedBy=multi-user.target
     echo "${SMTP_SERVICE_CONTENT}" > /etc/systemd/system/mail-smtp.service
 
     API_SERVICE_CONTENT="[Unit]
-Description=Gunicorn instance for Mail Web UI (Receive-Only)
+Description=Gunicorn instance for Mail Web UI
 After=network.target
 [Service]
 User=root
@@ -946,9 +960,10 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
     
-    ${PROJECT_DIR}/venv/bin/python3 -c "from app import init_db; init_db()"
+    $PYTHON_CMD -c "from app import init_db; init_db()"
     systemctl daemon-reload
     systemctl restart mail-smtp.service mail-api.service
     systemctl enable mail-smtp.service mail-api.service
@@ -960,16 +975,16 @@ WantedBy=multi-user.target
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    if [ -z "$SENDGRID_API_KEY" ] && [ "$IS_UPDATE" = false ]; then
-        echo -e "${YELLOW}提醒：您未在安装时提供SendGrid API密钥。${NC}"
-        echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件，填入您的密钥。"
+    if [ "$IS_UPDATE" = false ] && { [ -z "$SENDGRID_API_KEY" ] || [ -z "$DEFAULT_SENDER" ]; }; then
+        echo -e "${YELLOW}提醒：您未在安装时提供完整的SendGrid发件信息。${NC}"
+        echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
     fi
     echo "================================================================"
 }
 
 # --- 主逻辑 ---
 clear
-echo -e "${BLUE}小龙女她爸邮局服务系统一键脚本 (智能API终极版)${NC}"
+echo -e "${BLUE}小龙女她爸邮件服务器一键脚本 (智能API终极版V2)${NC}"
 echo "=============================================================="
 echo "请选择要执行的操作:"
 echo "1) 安装或更新邮件服务器核心服务"
