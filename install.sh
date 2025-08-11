@@ -322,10 +322,22 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
+    # --- 反垃圾邮件的核心判断 (已更新) ---
+    spam_keywords = ["email tester !", "smtp test"]
+    subject_lower = subject.lower()
+
+    # 1. 检查主题是否包含服务器IP
     if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
-        if subject == SERVER_PUBLIC_IP or SERVER_PUBLIC_IP in subject:
+        if SERVER_PUBLIC_IP in subject:
             app.logger.warning(f"SPAM REJECTED: Subject contains server IP. From: {msg.get('From')}, Subject: '{subject}'")
             return
+
+    # 2. 检查主题是否包含定义的垃圾关键词 (不区分大小写)
+    for keyword in spam_keywords:
+        if keyword in subject_lower:
+            app.logger.warning(f"SPAM REJECTED: Subject contains keyword '{keyword}'. From: {msg.get('From')}, Subject: '{subject}'")
+            return
+    # --- 判断结束 ---
 
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
     app.logger.info(f"SMTP信封接收地址: {to_address}")
