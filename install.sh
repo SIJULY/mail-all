@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本
+# 小龙女她爸邮局服务系统一键安装脚本 (Brevo版)
 #
 # 作者: 小龙女她爸
-# 日期: 2025-08-04
+# 日期: 2025-08-11
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -141,8 +141,8 @@ install_server() {
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
         EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
         EXISTING_SENDER=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        API_PROMPT="请输入您的 SendGrid API 密钥 (留空则使用旧值): "
-        SENDER_PROMPT="请输入您在SendGrid验证过的默认发件人邮箱 (留空则使用旧值): "
+        API_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (留空则使用旧值): "
+        SENDER_PROMPT="请输入您在Brevo验证过的默认发件人邮箱(也作为SMTP用户名) (留空则使用旧值): "
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
@@ -152,8 +152,8 @@ install_server() {
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
         EXISTING_SENDER=""
-        API_PROMPT="请输入您的 SendGrid API 密钥 (可留空): "
-        SENDER_PROMPT="请输入您在SendGrid验证过的默认发件人邮箱 (可留空): "
+        API_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (可留空): "
+        SENDER_PROMPT="请输入您在Brevo验证过的默认发件人邮箱(也作为SMTP用户名) (可留空): "
         PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
     fi
 
@@ -167,13 +167,13 @@ install_server() {
         exit 1
     fi
 
-    echo "--- SendGrid SMTP 发件服务配置 ---"
-    read -p "$API_PROMPT" SENDGRID_API_KEY
-    read -p "$SENDER_PROMPT" DEFAULT_SENDER
+    echo "--- Brevo SMTP 发件服务配置 ---"
+    read -p "$API_PROMPT" SMTP_API_KEY
+    read -p "$SENDER_PROMPT" DEFAULT_SENDER_EMAIL
 
     if [ "$IS_UPDATE" = true ]; then
-        if [ -z "$SENDGRID_API_KEY" ]; then SENDGRID_API_KEY=${EXISTING_API_KEY}; fi
-        if [ -z "$DEFAULT_SENDER" ]; then DEFAULT_SENDER=${EXISTING_SENDER}; fi
+        if [ -z "$SMTP_API_KEY" ]; then SMTP_API_KEY=${EXISTING_API_KEY}; fi
+        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER}; fi
     fi
 
     echo "--- 管理员账户设置 ---"
@@ -267,11 +267,13 @@ SERVER_PUBLIC_IP = "_PLACEHOLDER_SERVER_IP_"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
-SMTP_SERVER = "smtp.sendgrid.net"
+# --- Brevo SMTP Configuration ---
+SMTP_SERVER = "smtp-relay.brevo.com"
 SMTP_PORT = 587
-SMTP_USERNAME = "apikey"
-SMTP_PASSWORD = "_PLACEHOLDER_SENDGRID_API_KEY_"
+SMTP_PASSWORD = "_PLACEHOLDER_SMTP_PASSWORD_"
 DEFAULT_SENDER = "_PLACEHOLDER_DEFAULT_SENDER_"
+# For Brevo, SMTP_USERNAME is the same as the verified sender email.
+SMTP_USERNAME = DEFAULT_SENDER
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -322,7 +324,7 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
-    # --- 反垃圾邮件的核心判断 (已更新) ---
+    # --- 反垃圾邮件的核心判断 ---
     spam_keywords = ["email tester !", "smtp test"]
     subject_lower = subject.lower()
 
@@ -486,7 +488,7 @@ def send_email_via_smtp(to_address, subject, body):
 @login_required
 def compose_email():
     if not SMTP_PASSWORD or not DEFAULT_SENDER:
-        flash('发件功能未配置。请在安装脚本中提供SendGrid API密钥和已验证的发件人邮箱。', 'error')
+        flash('发件功能未配置。请在安装脚本中提供Brevo SMTP密钥和已验证的发件人邮箱。', 'error')
         return redirect(url_for('index'))
 
     form_data = {}
@@ -995,8 +997,8 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SENDGRID_API_KEY}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SMTP_API_KEY}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
     
     $PYTHON_CMD -c "from app import init_db; init_db()"
@@ -1011,8 +1013,8 @@ WantedBy=multi-user.target
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    if [ "$IS_UPDATE" = false ] && { [ -z "$SENDGRID_API_KEY" ] || [ -z "$DEFAULT_SENDER" ]; }; then
-        echo -e "${YELLOW}提醒：您未在安装时提供完整的SendGrid发件信息。${NC}"
+    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_API_KEY" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
+        echo -e "${YELLOW}提醒：您未在安装时提供完整的Brevo发件信息。${NC}"
         echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
     fi
     echo "================================================================"
