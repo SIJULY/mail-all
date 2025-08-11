@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (Brevo版)
+# 小龙女她爸邮局服务系统一键安装脚本 (Brevo最终版)
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-11
@@ -140,9 +140,12 @@ install_server() {
         EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
         EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        EXISTING_SENDER=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        API_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (留空则使用旧值): "
-        SENDER_PROMPT="请输入您在Brevo验证过的默认发件人邮箱(也作为SMTP用户名) (留空则使用旧值): "
+        EXISTING_LOGIN_EMAIL=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_SENDER_EMAIL=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        
+        KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (留空则使用旧值): "
+        LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (留空则使用旧值): "
+        SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (留空则使用旧值): "
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
@@ -151,9 +154,12 @@ install_server() {
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         EXISTING_API_KEY=""
-        EXISTING_SENDER=""
-        API_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (可留空): "
-        SENDER_PROMPT="请输入您在Brevo验证过的默认发件人邮箱(也作为SMTP用户名) (可留空): "
+        EXISTING_LOGIN_EMAIL=""
+        EXISTING_SENDER_EMAIL=""
+        
+        KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (可留空): "
+        LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (可留空): "
+        SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (可留空): "
         PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
     fi
 
@@ -168,12 +174,14 @@ install_server() {
     fi
 
     echo "--- Brevo SMTP 发件服务配置 ---"
-    read -p "$API_PROMPT" SMTP_API_KEY
-    read -p "$SENDER_PROMPT" DEFAULT_SENDER_EMAIL
+    read -p "$KEY_PROMPT" SMTP_API_KEY
+    read -p "$LOGIN_EMAIL_PROMPT" SMTP_LOGIN_EMAIL
+    read -p "$SENDER_EMAIL_PROMPT" DEFAULT_SENDER_EMAIL
 
     if [ "$IS_UPDATE" = true ]; then
         if [ -z "$SMTP_API_KEY" ]; then SMTP_API_KEY=${EXISTING_API_KEY}; fi
-        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER}; fi
+        if [ -z "$SMTP_LOGIN_EMAIL" ]; then SMTP_LOGIN_EMAIL=${EXISTING_LOGIN_EMAIL}; fi
+        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER_EMAIL}; fi
     fi
 
     echo "--- 管理员账户设置 ---"
@@ -270,10 +278,9 @@ app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 # --- Brevo SMTP Configuration ---
 SMTP_SERVER = "smtp-relay.brevo.com"
 SMTP_PORT = 587
+SMTP_USERNAME = "_PLACEHOLDER_SMTP_USERNAME_"
 SMTP_PASSWORD = "_PLACEHOLDER_SMTP_PASSWORD_"
 DEFAULT_SENDER = "_PLACEHOLDER_DEFAULT_SENDER_"
-# For Brevo, SMTP_USERNAME is the same as the verified sender email.
-SMTP_USERNAME = DEFAULT_SENDER
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
@@ -468,8 +475,8 @@ def login():
 def logout():
     session.clear(); return redirect(url_for('login'))
 def send_email_via_smtp(to_address, subject, body):
-    if not SMTP_PASSWORD or not DEFAULT_SENDER:
-        return False, "发件功能未配置(缺少API密钥或发件人地址)。"
+    if not SMTP_PASSWORD or not SMTP_USERNAME or not DEFAULT_SENDER:
+        return False, "发件功能未配置(缺少SMTP登录名、密钥或发件人地址)。"
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = DEFAULT_SENDER
@@ -487,8 +494,8 @@ def send_email_via_smtp(to_address, subject, body):
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
-    if not SMTP_PASSWORD or not DEFAULT_SENDER:
-        flash('发件功能未配置。请在安装脚本中提供Brevo SMTP密钥和已验证的发件人邮箱。', 'error')
+    if not SMTP_PASSWORD or not SMTP_USERNAME or not DEFAULT_SENDER:
+        flash('发件功能未配置。请在安装脚本中提供Brevo的SMTP密钥、登录邮箱和已验证的发件人邮箱。', 'error')
         return redirect(url_for('index'))
 
     form_data = {}
@@ -997,7 +1004,8 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SENDGRID_API_KEY_#${SMTP_API_KEY}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_API_KEY}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_LOGIN_EMAIL}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
     
@@ -1013,7 +1021,7 @@ WantedBy=multi-user.target
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_API_KEY" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
+    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_API_KEY" ] || [ -z "$DEFAULT_SENDER_EMAIL" ] || [ -z "$SMTP_LOGIN_EMAIL" ]; }; then
         echo -e "${YELLOW}提醒：您未在安装时提供完整的Brevo发件信息。${NC}"
         echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
     fi
