@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (MailerSend最终版)
+# 小龙女她爸邮局服务系统一键安装脚本 (MailerSend-SMTP最终版)
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-15
@@ -133,10 +133,6 @@ setup_caddy_reverse_proxy() {
 
 # --- 安装/更新功能 ---
 install_server() {
-    # 预设您的MailerSend信息
-    PRESET_API_KEY=" "
-    PRESET_SENDER_EMAIL=" "
-
     if [ -f "${PROJECT_DIR}/app.py" ]; then
         IS_UPDATE=true
         echo -e "${BLUE}>>> 检测到已有安装，进入更新模式...${NC}"
@@ -144,8 +140,9 @@ install_server() {
         EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
         
-        KEY_PROMPT="请输入您的 MailerSend API 密钥 (Token) [默认为: ${PRESET_API_KEY}]: "
-        SENDER_PROMPT="请输入您在 MailerSend 验证过的默认发件人邮箱 [默认为: ${PRESET_SENDER_EMAIL}]: "
+        USER_PROMPT="请输入您在MailerSend创建的SMTP用户名 (留空则使用旧值): "
+        PASS_PROMPT="请输入您在MailerSend获取的SMTP密码 (留空则使用旧值): "
+        SENDER_PROMPT="请输入您在MailerSend验证过的默认发件人邮箱 (留空则使用旧值): "
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
@@ -154,8 +151,9 @@ install_server() {
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
         
-        KEY_PROMPT="请输入您的 MailerSend API 密钥 (Token) [默认为: ${PRESET_API_KEY}]: "
-        SENDER_PROMPT="请输入您在 MailerSend 验证过的默认发件人邮箱 [默认为: ${PRESET_SENDER_EMAIL}]: "
+        USER_PROMPT="请输入您在MailerSend创建的SMTP用户名 (可留空): "
+        PASS_PROMPT="请输入您在MailerSend获取的SMTP密码 (可留空): "
+        SENDER_PROMPT="请输入您在MailerSend验证过的默认发件人邮箱 (可留空): "
         PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
     fi
 
@@ -170,11 +168,18 @@ install_server() {
     fi
 
     echo "--- MailerSend SMTP 发件服务配置 ---"
-    read -p "$KEY_PROMPT" SMTP_API_KEY
-    SMTP_API_KEY=${SMTP_API_KEY:-$PRESET_API_KEY}
-    
+    read -p "$USER_PROMPT" SMTP_USER
+    read -p "$PASS_PROMPT" SMTP_PASS
     read -p "$SENDER_PROMPT" DEFAULT_SENDER_EMAIL
-    DEFAULT_SENDER_EMAIL=${DEFAULT_SENDER_EMAIL:-$PRESET_SENDER_EMAIL}
+
+    if [ "$IS_UPDATE" = true ]; then
+        EXISTING_USER=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_PASS=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_SENDER=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        if [ -z "$SMTP_USER" ]; then SMTP_USER=${EXISTING_USER}; fi
+        if [ -z "$SMTP_PASS" ]; then SMTP_PASS=${EXISTING_PASS}; fi
+        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER}; fi
+    fi
 
     echo "--- 管理员账户设置 ---"
     read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
@@ -467,8 +472,8 @@ def login():
 def logout():
     session.clear(); return redirect(url_for('login'))
 def send_email_via_smtp(to_address, subject, body):
-    if not SMTP_USERNAME or not DEFAULT_SENDER:
-        return False, "发件功能未配置(缺少API密钥或发件人地址)。"
+    if not SMTP_USERNAME or not SMTP_PASSWORD or not DEFAULT_SENDER:
+        return False, "发件功能未配置(缺少SMTP用户名、密码或发件人地址)。"
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = DEFAULT_SENDER
@@ -486,8 +491,8 @@ def send_email_via_smtp(to_address, subject, body):
 @app.route('/compose', methods=['GET', 'POST'])
 @login_required
 def compose_email():
-    if not SMTP_USERNAME or not DEFAULT_SENDER:
-        flash('发件功能未配置。请在安装脚本中提供MailerSend的API密钥和已验证的发件人邮箱。', 'error')
+    if not SMTP_USERNAME or not SMTP_PASSWORD or not DEFAULT_SENDER:
+        flash('发件功能未配置。请在安装脚本中提供MailerSend的SMTP用户名、密码和已验证的发件人邮箱。', 'error')
         return redirect(url_for('index'))
 
     form_data = {}
@@ -592,7 +597,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
     
     processed_emails = []
     beijing_tz = ZoneInfo("Asia/Shanghai")
-    sending_enabled = bool(SMTP_USERNAME and DEFAULT_SENDER)
+    sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
 
     for item in emails_data:
         utc_dt = datetime.strptime(item['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
@@ -822,7 +827,7 @@ def view_email_detail(email_id):
         conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
     conn.close()
     
-    sending_enabled = bool(SMTP_USERNAME and DEFAULT_SENDER)
+    sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
     _, sender_address = parseaddr(email['sender'])
     is_replyable_address = '@' in (sender_address or '')
 
@@ -996,8 +1001,8 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_API_KEY}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#""#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_USER}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_PASS}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
     
@@ -1013,7 +1018,7 @@ WantedBy=multi-user.target
     echo -e "您的网页版登录地址是："
     echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
     echo ""
-    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_API_KEY" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
+    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
         echo -e "${YELLOW}提醒：您未在安装时提供完整的MailerSend发件信息。${NC}"
         echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
     fi
