@@ -134,8 +134,8 @@ setup_caddy_reverse_proxy() {
 # --- 安装/更新功能 ---
 install_server() {
     # 预设您的MailerSend信息
-    PRESET_API_KEY="mlsn.797bfd5505591ee185f65d24f17f123e2e6461fa8e6800994f52e7852dc2b77f"
-    PRESET_SENDER_EMAIL="sijuly@mail.sijuly.nyc.mn"
+    PRESET_API_KEY=" "
+    PRESET_SENDER_EMAIL=" "
 
     if [ -f "${PROJECT_DIR}/app.py" ]; then
         IS_UPDATE=true
