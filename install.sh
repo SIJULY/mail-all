@@ -1,6 +1,6 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (MailerSend-SMTP最终版)
+# 小龙女她爸邮局服务系统一键安装脚本 (MailerSend-最终修正版)
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-15
@@ -161,7 +161,7 @@ install_server() {
     SYSTEM_TITLE=${SYSTEM_TITLE:-${EXISTING_TITLE}}
 
     read -p "请输入您希望使用的网页后台端口 [默认为: ${EXISTING_PORT}]: " WEB_PORT
-    WEB_PORT=${WEB_PORT:-${EXISTING_PORT}}
+    WEB_PORT=${WEB_PORT:-${WEB_PORT}}
     if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]] || [ "$WEB_PORT" -lt 1 ] || [ "$WEB_PORT" -gt 65535 ]; then
         echo -e "${RED}错误：端口号无效，请输入1-65535之间的数字。${NC}"
         exit 1
@@ -272,8 +272,8 @@ SERVER_PUBLIC_IP = "_PLACEHOLDER_SERVER_IP_"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
-# --- MailerSend SMTP Configuration ---
-SMTP_SERVER = "smtp.mailersend.com"
+# --- MailerSend SMTP Configuration (Corrected) ---
+SMTP_SERVER = "smtp.mailersend.net"
 SMTP_PORT = 587
 SMTP_USERNAME = "_PLACEHOLDER_SMTP_USERNAME_"
 SMTP_PASSWORD = "_PLACEHOLDER_SMTP_PASSWORD_"
