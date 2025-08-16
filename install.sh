@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (Brevo最终版)
+# 小龙女她爸邮局服务系统一键安装脚本 (最终修复版)
 #
 # 作者: 小龙女她爸
-# 日期: 2025-08-11
+# 日期: 2025-08-16
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -93,7 +93,7 @@ setup_caddy_reverse_proxy() {
         echo -e "${RED}错误：邮箱地址不能为空。${NC}"
         exit 1
     fi
-
+    
     WEB_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
     read -p "请确认您的邮件服务Web后台端口 [默认为 ${WEB_PORT}]: " USER_WEB_PORT
     WEB_PORT=${USER_WEB_PORT:-${WEB_PORT}}
@@ -104,10 +104,10 @@ setup_caddy_reverse_proxy() {
     reverse_proxy 127.0.0.1:${WEB_PORT}
     tls ${LETSENCRYPT_EMAIL}
 }"
-
+    
     mkdir -p /etc/caddy/conf.d/
     echo "${CADDYFILE_CONTENT}" > /etc/caddy/conf.d/mail_server.caddy
-
+    
     if ! grep -q "import /etc/caddy/conf.d/\*.caddy" /etc/caddy/Caddyfile; then
         echo -e "\nimport /etc/caddy/conf.d/*.caddy" >> /etc/caddy/Caddyfile
     fi
@@ -117,7 +117,7 @@ setup_caddy_reverse_proxy() {
         systemctl start caddy
     fi
     systemctl reload caddy
-
+    
     echo "================================================================"
     echo -e "${GREEN}🎉 恭喜！Caddy 反向代理配置完成！ 🎉${NC}"
     echo "================================================================"
@@ -139,10 +139,7 @@ install_server() {
         EXISTING_TITLE=$(grep -oP "SYSTEM_TITLE = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "轻量级邮件服务器")
         EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
-        EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        EXISTING_LOGIN_EMAIL=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        EXISTING_SENDER_EMAIL=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-
+        
         KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (留空则使用旧值): "
         LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (留空则使用旧值): "
         SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (留空则使用旧值): "
@@ -153,10 +150,7 @@ install_server() {
         EXISTING_TITLE="小龙女她爸邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
-        EXISTING_API_KEY=""
-        EXISTING_LOGIN_EMAIL=""
-        EXISTING_SENDER_EMAIL=""
-
+        
         KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (可留空): "
         LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (可留空): "
         SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (可留空): "
@@ -179,6 +173,9 @@ install_server() {
     read -p "$SENDER_EMAIL_PROMPT" DEFAULT_SENDER_EMAIL
 
     if [ "$IS_UPDATE" = true ]; then
+        EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_LOGIN_EMAIL=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_SENDER_EMAIL=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
         if [ -z "$SMTP_API_KEY" ]; then SMTP_API_KEY=${EXISTING_API_KEY}; fi
         if [ -z "$SMTP_LOGIN_EMAIL" ]; then SMTP_LOGIN_EMAIL=${EXISTING_LOGIN_EMAIL}; fi
         if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER_EMAIL}; fi
@@ -187,12 +184,12 @@ install_server() {
     echo "--- 管理员账户设置 ---"
     read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
     ADMIN_USERNAME=${ADMIN_USERNAME:-${EXISTING_ADMIN}}
-
+    
     read -sp "$PW_PROMPT" ADMIN_PASSWORD
     echo
-
+    
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
-
+    
     echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
     PUBLIC_IP=$(curl -s icanhazip.com || echo "127.0.0.1")
     if [ -z "$PUBLIC_IP" ]; then
@@ -206,19 +203,19 @@ install_server() {
     apt-get update
     apt-get -y upgrade
     apt-get -y install python3-pip python3-venv ufw curl
-
+    
     echo -e "${GREEN}>>> 步骤 2: 创建应用程序目录和虚拟环境...${NC}"
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-
+    
     PIP_CMD="${PROJECT_DIR}/venv/bin/pip"
     PYTHON_CMD="${PROJECT_DIR}/venv/bin/python3"
     PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-
+    
     echo -e "${BLUE}>>> Python 版本为 ${PYTHON_VERSION}。正在安装依赖...${NC}"
     $PIP_CMD install flask gunicorn aiosmtpd werkzeug
-
+    
     if [[ $(echo "$PYTHON_VERSION < 3.9" | bc -l 2>/dev/null) -eq 1 ]]; then
         echo -e "${YELLOW}>>> 检测到 Python 版本低于 3.9，正在安装 zoneinfo 兼容包...${NC}"
         $PIP_CMD install 'backports.zoneinfo; python_version < "3.9"'
@@ -240,7 +237,7 @@ install_server() {
             exit 1
         fi
     fi
-
+    
     echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
@@ -323,7 +320,7 @@ def run_cleanup_if_needed():
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
-
+    
     subject = ""
     if msg['Subject']:
         subject_raw, encoding = decode_header(msg['Subject'])[0]
@@ -376,7 +373,7 @@ def process_email_data(to_address, raw_email_data):
         elif from_addr and '@' in from_addr: final_sender = from_addr
     if not final_sender: final_sender = "unknown@sender.com"
     app.logger.info(f"最终解析结果: 发件人 -> {final_sender}, 收件人 -> {final_recipient}")
-
+    
     body, body_type = "", "text/plain"
     if msg.is_multipart():
         for part in msg.walk():
@@ -503,7 +500,7 @@ def compose_email():
         to_address = request.form.get('to')
         subject = request.form.get('subject')
         body = request.form.get('body')
-
+        
         if not to_address or not subject:
             flash('收件人和主题不能为空！', 'error')
             form_data = {'to': to_address, 'subject': subject, 'body': body}
@@ -524,7 +521,7 @@ def compose_email():
             if not session.get('is_admin'):
                 query += " AND recipient = ?"
                 params.append(session['user_email'])
-
+            
             original_email = conn.execute(query, params).fetchone()
             conn.close()
 
@@ -541,7 +538,7 @@ def compose_email():
                 beijing_tz = ZoneInfo("Asia/Shanghai")
                 utc_dt = datetime.strptime(original_email['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                 bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
-
+                
                 body_content = strip_tags_for_preview(original_email['body'] or '')
                 quoted_text = "\\n".join([f"> {line}" for line in body_content.splitlines()])
                 form_data['body'] = f"\\n\\n\\n--- On {bjt_str}, {original_email['sender']} wrote: ---\\n{quoted_text}"
@@ -590,467 +587,478 @@ def compose_email():
         </form>
         </div></body></html>
     ''', SYSTEM_TITLE=SYSTEM_TITLE, from_email=DEFAULT_SENDER, form_data=form_data)
-def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
-    if token_view_context:
-        endpoint = 'view_mail_by_token'
-        title_text = f"收件箱 ({token_view_context['mail']}) - 共 {total_emails} 封"
-    else:
-        endpoint = 'admin_view' if is_admin_view else 'view_emails'
-        title_text = f"管理员视图 (共 {total_emails} 封)" if is_admin_view else f"收件箱 ({session.get('user_email', '')} - 共 {total_emails} 封)"
+    def render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=None):
+        if token_view_context:
+            endpoint = 'view_mail_by_token'
+            title_text = f"收件箱 ({token_view_context['mail']}) - 共 {total_emails} 封"
+        else:
+            endpoint = 'admin_view' if is_admin_view else 'view_emails'
+            title_text = f"管理员视图 (共 {total_emails} 封)" if is_admin_view else f"收件箱 ({session.get('user_email', '')} - 共 {total_emails} 封)"
+        
+        processed_emails = []
+        beijing_tz = ZoneInfo("Asia/Shanghai")
+        sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
 
-    processed_emails = []
-    beijing_tz = ZoneInfo("Asia/Shanghai")
-    sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
-
-    for item in emails_data:
-        utc_dt = datetime.strptime(item['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-        bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
-        body_for_preview = strip_tags_for_preview(item['body']) if item['body_type'] and 'html' in item['body_type'] else (item['body'] or "")
-        code = extract_code_from_body(body_for_preview)
-        processed_emails.append({
-            'id': item['id'], 'bjt_str': bjt_str, 'subject': item['subject'], 'is_read': item['is_read'],
-            'preview_text': code if code else body_for_preview, 'is_code': bool(code),
-            'recipient': item['recipient'], 'sender': parseaddr(item['sender'] or "")[1]
-        })
-    return render_template_string('''
-        <!DOCTYPE html><html><head><title>{{title}} - {{SYSTEM_TITLE}}</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; font-size: 14px; }
-            .container { max-width: 95%; margin: 0 auto; padding: 1em; }
-            .flash-success, .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; border: 1px solid transparent; transition: opacity 0.5s ease; }
-            .flash-success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
-            .flash-error { background-color: #f8d7da; color: #721c24; border-color: #f5c6cb; }
-            table { border-collapse: collapse; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: #fff; margin-top: 1.5em; border: 1px solid #dee2e6; }
-            th, td { padding: 12px 15px; vertical-align: middle; border-bottom: 1px solid #dee2e6; border-right: 1px solid #dee2e6; word-break: break-all; }
-            th:last-child, td:last-child { border-right: none; }
-            tr.unread { font-weight: bold; background-color: #fffaf0; }
-            tr:hover { background-color: #f1f3f5; }
-            th { background-color: #4CAF50; color: white; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.05em; text-align: center; }
-            .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5em; flex-wrap: wrap; gap: 1em;}
-            .top-bar h2 { margin: 0; color: #333; font-size: 1.5em; }
-            .top-bar .user-actions { display: flex; gap: 10px; }
-            .btn { text-decoration: none; display: inline-block; padding: 8px 15px; border: 1px solid transparent; border-radius: 4px; color: white; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s; white-space: nowrap; }
-            .btn-primary { background-color: #007bff; border-color: #007bff; } .btn-primary:hover { background-color: #0056b3; }
-            .btn-secondary { background-color: #6c757d; border-color: #6c757d; } .btn-danger { background-color: #dc3545; border-color: #dc3545; }
-            .controls { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1.5em; border-bottom: 1px solid #dee2e6; flex-wrap: wrap; gap: 1em;}
-            .controls .bulk-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-            .search-form { display: flex; gap: 5px; }
-            .search-form input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; min-width: 200px;}
-            .pagination { margin-top: 1.5em; text-align: center; }
-            .pagination a { color: #007bff; padding: 8px 12px; text-decoration: none; border: 1px solid #ddd; margin: 0 4px; border-radius: 4px; }
-            .pagination a:hover { background-color: #e9ecef; }
-            .preview-code { color: #e83e8c; font-weight: bold; font-family: monospace; }
-            a.view-link { color: #007bff; text-decoration: none; } a.view-link:hover { text-decoration: underline; }
-            td { text-align: left; } .preview-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-        </style></head><body>
-        <div class="container">
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% for category, message in messages %}
-                    <div class="flash-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endwith %}
-            <div class="top-bar">
-                <h2>{{title}}</h2>
-                <div class="user-actions">
-                    {% if sending_enabled %}
-                    <a href="{{url_for('compose_email')}}" class="btn btn-primary">写邮件</a>
-                    {% endif %}
-                    {% if not token_view_context and is_admin_view %}
-                        <a href="{{url_for('manage_users')}}" class="btn btn-secondary">管理用户</a>
-                    {% endif %}
-                    {% if not token_view_context %}
-                         <a href="{{url_for('logout')}}" class="btn btn-danger">登出</a>
-                    {% endif %}
+        for item in emails_data:
+            utc_dt = datetime.strptime(item['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+            bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
+            body_for_preview = strip_tags_for_preview(item['body']) if item['body_type'] and 'html' in item['body_type'] else (item['body'] or "")
+            code = extract_code_from_body(body_for_preview)
+            processed_emails.append({
+                'id': item['id'], 'bjt_str': bjt_str, 'subject': item['subject'], 'is_read': item['is_read'],
+                'preview_text': code if code else body_for_preview, 'is_code': bool(code),
+                'recipient': item['recipient'], 'sender': parseaddr(item['sender'] or "")[1]
+            })
+        return render_template_string('''
+            <!DOCTYPE html><html><head><title>{{title}} - {{SYSTEM_TITLE}}</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; font-size: 14px; }
+                .container { max-width: 95%; margin: 0 auto; padding: 1em; }
+                .flash-success, .flash-error { padding: 1em; margin-bottom: 1em; border-radius: 4px; border: 1px solid transparent; transition: opacity 0.5s ease; }
+                .flash-success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
+                .flash-error { background-color: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+                table { border-collapse: collapse; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: #fff; margin-top: 1.5em; border: 1px solid #dee2e6; }
+                th, td { padding: 12px 15px; vertical-align: middle; border-bottom: 1px solid #dee2e6; border-right: 1px solid #dee2e6; word-break: break-all; }
+                th:last-child, td:last-child { border-right: none; }
+                tr.unread { font-weight: bold; background-color: #fffaf0; }
+                tr:hover { background-color: #f1f3f5; }
+                th { background-color: #4CAF50; color: white; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.05em; text-align: center; }
+                .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5em; flex-wrap: wrap; gap: 1em;}
+                .top-bar h2 { margin: 0; color: #333; font-size: 1.5em; }
+                .top-bar .user-actions { display: flex; gap: 10px; }
+                .btn { text-decoration: none; display: inline-block; padding: 8px 15px; border: 1px solid transparent; border-radius: 4px; color: white; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s; white-space: nowrap; }
+                .btn-primary { background-color: #007bff; border-color: #007bff; } .btn-primary:hover { background-color: #0056b3; }
+                .btn-secondary { background-color: #6c757d; border-color: #6c757d; } .btn-danger { background-color: #dc3545; border-color: #dc3545; }
+                .controls { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1.5em; border-bottom: 1px solid #dee2e6; flex-wrap: wrap; gap: 1em;}
+                .controls .bulk-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+                .search-form { display: flex; gap: 5px; }
+                .search-form input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; min-width: 200px;}
+                .pagination { margin-top: 1.5em; text-align: center; }
+                .pagination a { color: #007bff; padding: 8px 12px; text-decoration: none; border: 1px solid #ddd; margin: 0 4px; border-radius: 4px; }
+                .pagination a:hover { background-color: #e9ecef; }
+                .preview-code { color: #e83e8c; font-weight: bold; font-family: monospace; }
+                a.view-link { color: #007bff; text-decoration: none; } a.view-link:hover { text-decoration: underline; }
+                td { text-align: left; } .preview-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+            </style></head><body>
+            <div class="container">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% for category, message in messages %}
+                        <div class="flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endwith %}
+                <div class="top-bar">
+                    <h2>{{title}}</h2>
+                    <div class="user-actions">
+                        {% if sending_enabled %}
+                        <a href="{{url_for('compose_email')}}" class="btn btn-primary">写邮件</a>
+                        {% endif %}
+                        {% if not token_view_context and is_admin_view %}
+                            <a href="{{url_for('manage_users')}}" class="btn btn-secondary">管理用户</a>
+                        {% endif %}
+                        {% if not token_view_context %}
+                             <a href="{{url_for('logout')}}" class="btn btn-danger">登出</a>
+                        {% endif %}
+                    </div>
                 </div>
-            </div>
-            <div class="controls">
-                <div class="bulk-actions">
-                    {% if is_admin_view %}
-                        <button onclick="window.location.reload();" class="btn btn-secondary">刷新</button>
-                        <button type="submit" form="delete-selected-form" class="btn btn-secondary">删除选中</button>
-                        <form id="delete-all-form" method="POST" action="{{url_for('delete_all_emails')}}" style="display: inline;" onsubmit="return confirm('您确定要删除所有邮件吗？这将无法恢复！');">
-                            <button type="submit" class="btn btn-danger">删除所有</button>
-                        </form>
-                    {% endif %}
+                <div class="controls">
+                    <div class="bulk-actions">
+                        {% if is_admin_view %}
+                            <button onclick="window.location.reload();" class="btn btn-secondary">刷新</button>
+                            <button type="submit" form="delete-selected-form" class="btn btn-secondary">删除选中</button>
+                            <form id="delete-all-form" method="POST" action="{{url_for('delete_all_emails')}}" style="display: inline;" onsubmit="return confirm('您确定要删除所有邮件吗？这将无法恢复！');">
+                                <button type="submit" class="btn btn-danger">删除所有</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                    <form method="get" class="search-form" action="{{ url_for(endpoint) }}">
+                        <input type="text" name="search" value="{{search_query|e}}" placeholder="搜索...">
+                        {% if token_view_context %}
+                        <input type="hidden" name="token" value="{{ token_view_context.token }}">
+                        <input type="hidden" name="mail" value="{{ token_view_context.mail }}">
+                        {% endif %}
+                        <button type="submit" class="btn btn-primary">搜索</button>
+                    </form>
                 </div>
-                <form method="get" class="search-form" action="{{ url_for(endpoint) }}">
-                    <input type="text" name="search" value="{{search_query|e}}" placeholder="搜索...">
-                    {% if token_view_context %}
-                    <input type="hidden" name="token" value="{{ token_view_context.token }}">
-                    <input type="hidden" name="mail" value="{{ token_view_context.mail }}">
-                    {% endif %}
-                    <button type="submit" class="btn btn-primary">搜索</button>
+                <form id="delete-selected-form" method="POST" action="{{url_for('delete_selected_emails')}}">
+                <table>
+                    <thead><tr>
+                        <th style="width: 3%; min-width: 40px;"><input type="checkbox" onclick="toggleAllCheckboxes(this);" {% if not is_admin_view %}style="display:none;"{% endif %}></th>
+                        <th style="width: 15%; min-width: 160px;">时间 (北京)</th><th style="width: 20%; min-width: 150px;">主题</th>
+                        <th style="width: 35%; min-width: 200px;">内容预览</th><th style="width: 13%; min-width: 120px;">收件人</th><th style="width: 14%; min-width: 120px;">发件人</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for mail in mails %}
+                    <tr class="{{'unread' if not mail.is_read else ''}}">
+                        <td style="text-align: center;"><input type="checkbox" name="selected_ids" value="{{mail.id}}" {% if not is_admin_view %}style="display:none;"{% endif %}></td>
+                        <td>{{mail.bjt_str}}</td>
+                        <td>{{mail.subject|e}} <a href="{{ url_for('view_email_detail', email_id=mail.id) }}" target="_blank" class="view-link" title="新窗口打开">↳</a></td>
+                        <td>
+                            {% if mail.is_code %}<span class="preview-code">{{mail.preview_text|e}}</span>
+                            {% else %}<div class="preview-text" title="{{mail.preview_text|e}}">{{mail.preview_text|e}}</div>{% endif %}
+                        </td>
+                        <td>{{mail.recipient|e}}</td><td>{{mail.sender|e}}</td>
+                    </tr>
+                    {% else %}<tr><td colspan="6" style="text-align:center;padding:2em;">无邮件</td></tr>{% endfor %}
+                    </tbody>
+                </table>
                 </form>
+                <div class="pagination">
+                    {% if page > 1 %}
+                        <a href="{{url_for(endpoint, page=page-1, search=search_query)}}">&laquo; 上一页</a>
+                    {% endif %}
+                    <span> Page {{page}} / {{total_pages}} </span>
+                    {% if page < total_pages %}
+                        <a href="{{url_for(endpoint, page=page+1, search=search_query)}}">下一页 &raquo;</a>
+                    {% endif %}
+                </div>
             </div>
-            <form id="delete-selected-form" method="POST" action="{{url_for('delete_selected_emails')}}">
-            <table>
-                <thead><tr>
-                    <th style="width: 3%; min-width: 40px;"><input type="checkbox" onclick="toggleAllCheckboxes(this);" {% if not is_admin_view %}style="display:none;"{% endif %}></th>
-                    <th style="width: 15%; min-width: 160px;">时间 (北京)</th><th style="width: 20%; min-width: 150px;">主题</th>
-                    <th style="width: 35%; min-width: 200px;">内容预览</th><th style="width: 13%; min-width: 120px;">收件人</th><th style="width: 14%; min-width: 120px;">发件人</th>
-                </tr></thead>
-                <tbody>
-                {% for mail in mails %}
-                <tr class="{{'unread' if not mail.is_read else ''}}">
-                    <td style="text-align: center;"><input type="checkbox" name="selected_ids" value="{{mail.id}}" {% if not is_admin_view %}style="display:none;"{% endif %}></td>
-                    <td>{{mail.bjt_str}}</td>
-                    <td>{{mail.subject|e}} <a href="{{ url_for('view_email_detail', email_id=mail.id) }}" target="_blank" class="view-link" title="新窗口打开">↳</a></td>
-                    <td>
-                        {% if mail.is_code %}<span class="preview-code">{{mail.preview_text|e}}</span>
-                        {% else %}<div class="preview-text" title="{{mail.preview_text|e}}">{{mail.preview_text|e}}</div>{% endif %}
-                    </td>
-                    <td>{{mail.recipient|e}}</td><td>{{mail.sender|e}}</td>
-                </tr>
-                {% else %}<tr><td colspan="6" style="text-align:center;padding:2em;">无邮件</td></tr>{% endfor %}
-                </tbody>
-            </table>
-            </form>
-            <div class="pagination">
-                {% if page > 1 %}
-                    <a href="{{url_for(endpoint, page=page-1, search=search_query)}}">&laquo; 上一页</a>
-                {% endif %}
-                <span> Page {{page}} / {{total_pages}} </span>
-                {% if page < total_pages %}
-                    <a href="{{url_for(endpoint, page=page+1, search=search_query)}}">下一页 &raquo;</a>
-                {% endif %}
-            </div>
-        </div>
-        <script>
-            function toggleAllCheckboxes(source) {
-                var checkboxes = document.getElementsByName('selected_ids');
-                for(var i=0; i < checkboxes.length; i++) { checkboxes[i].checked = source.checked; }
-            }
-            document.addEventListener('DOMContentLoaded', function() {
-                const flashMessages = document.querySelectorAll('.flash-success, .flash-error');
-                flashMessages.forEach(function(message) {
-                    setTimeout(function() {
-                        message.style.opacity = '0';
-                        setTimeout(function() { message.style.display = 'none'; }, 500);
-                    }, 5000); // 5 seconds
+            <script>
+                function toggleAllCheckboxes(source) {
+                    var checkboxes = document.getElementsByName('selected_ids');
+                    for(var i=0; i < checkboxes.length; i++) { checkboxes[i].checked = source.checked; }
+                }
+                document.addEventListener('DOMContentLoaded', function() {
+                    const flashMessages = document.querySelectorAll('.flash-success, .flash-error');
+                    flashMessages.forEach(function(message) {
+                        setTimeout(function() {
+                            message.style.opacity = '0';
+                            setTimeout(function() { message.style.display = 'none'; }, 500);
+                        }, 5000); // 5 seconds
+                    });
                 });
-            });
-        </script>
-        </body></html>
-    ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context, sending_enabled=sending_enabled)
-@app.route('/view')
-@login_required
-def view_emails():
-    return base_view_logic(is_admin_view=False)
-@app.route('/admin')
-@login_required
-@admin_required
-def admin_view():
-    return base_view_logic(is_admin_view=True)
-def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
-    search_query = request.args.get('search', '').strip()
-    page = request.args.get('page', 1, type=int)
-    conn = get_db_conn()
-    where_clauses, params = [], []
-    token_context = None
-    if recipient_override:
-        is_admin_view = False
-        where_clauses.append("recipient = ?"); params.append(recipient_override)
-        if search_query: where_clauses.append("(subject LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*2)
-        token_context = {'token': request.args.get('token'), 'mail': recipient_override}
-    elif is_admin_view:
-        if search_query: where_clauses.append("(subject LIKE ? OR recipient LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*3)
-    else:
-        where_clauses.append("recipient = ?"); params.append(session['user_email'])
-        if search_query: where_clauses.append("(subject LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*2)
-    where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-    total_emails = conn.execute(f"SELECT COUNT(*) FROM received_emails {where_sql}", params).fetchone()[0]
-    total_pages = math.ceil(total_emails / EMAILS_PER_PAGE) if total_emails > 0 else 1
-    offset = (page - 1) * EMAILS_PER_PAGE
-    emails_data = conn.execute(f"SELECT * FROM received_emails {where_sql} ORDER BY id DESC LIMIT ? OFFSET ?", params + [EMAILS_PER_PAGE, offset]).fetchall()
-    if mark_as_read:
-        ids_to_mark = [str(e['id']) for e in emails_data if not e['is_read']]
-        if ids_to_mark:
-            conn.execute(f"UPDATE received_emails SET is_read=1 WHERE id IN ({','.join(ids_to_mark)})")
-            conn.commit()
-    conn.close()
-    return render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=token_context)
-@app.route('/Mail')
-def view_mail_by_token():
-    token = request.args.get('token')
-    recipient_mail = request.args.get('mail')
-    if not token or token != SPECIAL_VIEW_TOKEN: return jsonify({"error": "Invalid token"}), 401
-    if not recipient_mail: return jsonify({"error": "mail parameter is missing"}), 400
-    subject_keywords = ["verify your email address", "验证您的电子邮件地址", "e メールアドレスを検証してください", "verification code"]
-    conn = get_db_conn()
-    try:
-        messages = conn.execute("SELECT id, subject, body, body_type FROM received_emails WHERE recipient = ? ORDER BY id DESC LIMIT 50", (recipient_mail,)).fetchall()
-        for msg in messages:
-            subject = (msg['subject'] or "").lower().strip()
-            if any(subject.startswith(keyword) for keyword in subject_keywords):
-                return Response(msg['body'], mimetype=f"{msg['body_type'] or 'text/html'}; charset=utf-8")
-        return jsonify({"error": "Verification email not found"}), 404
-    finally:
-        if conn: conn.close()
-@app.route('/delete_selected_emails', methods=['POST'])
-@login_required
-@admin_required
-def delete_selected_emails():
-    selected_ids = request.form.getlist('selected_ids')
-    if selected_ids:
+            </script>
+            </body></html>
+        ''', title=title_text, mails=processed_emails, page=page, total_pages=total_pages, search_query=search_query, is_admin_view=is_admin_view, endpoint=endpoint, SYSTEM_TITLE=SYSTEM_TITLE, token_view_context=token_view_context, sending_enabled=sending_enabled)
+    @app.route('/view')
+    @login_required
+    def view_emails():
+        return base_view_logic(is_admin_view=False)
+    @app.route('/admin')
+    @login_required
+    @admin_required
+    def admin_view():
+        return base_view_logic(is_admin_view=True)
+    def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
+        search_query = request.args.get('search', '').strip()
+        page = request.args.get('page', 1, type=int)
+        conn = get_db_conn()
+        where_clauses, params = [], []
+        token_context = None
+        if recipient_override:
+            is_admin_view = False
+            where_clauses.append("recipient = ?"); params.append(recipient_override)
+            if search_query: where_clauses.append("(subject LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*2)
+            token_context = {'token': request.args.get('token'), 'mail': recipient_override}
+        elif is_admin_view:
+            if search_query: where_clauses.append("(subject LIKE ? OR recipient LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*3)
+        else:
+            where_clauses.append("recipient = ?"); params.append(session['user_email'])
+            if search_query: where_clauses.append("(subject LIKE ? OR sender LIKE ?)"); params.extend([f"%{search_query}%"]*2)
+        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        total_emails = conn.execute(f"SELECT COUNT(*) FROM received_emails {where_sql}", params).fetchone()[0]
+        total_pages = math.ceil(total_emails / EMAILS_PER_PAGE) if total_emails > 0 else 1
+        offset = (page - 1) * EMAILS_PER_PAGE
+        emails_data = conn.execute(f"SELECT * FROM received_emails {where_sql} ORDER BY id DESC LIMIT ? OFFSET ?", params + [EMAILS_PER_PAGE, offset]).fetchall()
+        if mark_as_read:
+            ids_to_mark = [str(e['id']) for e in emails_data if not e['is_read']]
+            if ids_to_mark:
+                conn.execute(f"UPDATE received_emails SET is_read=1 WHERE id IN ({','.join(ids_to_mark)})")
+                conn.commit()
+        conn.close()
+        return render_email_list_page(emails_data, page, total_pages, total_emails, search_query, is_admin_view, token_view_context=token_context)
+    @app.route('/Mail')
+    def view_mail_by_token():
+        token = request.args.get('token')
+        recipient_mail = request.args.get('mail')
+        if not token or token != SPECIAL_VIEW_TOKEN: return jsonify({"error": "Invalid token"}), 401
+        if not recipient_mail: return jsonify({"error": "mail parameter is missing"}), 400
+        subject_keywords = ["verify your email address", "验证您的电子邮件地址", "e メールアドレスを検証してください", "verification code"]
         conn = get_db_conn()
         try:
-            placeholders = ','.join('?' for _ in selected_ids)
-            query = f"DELETE FROM received_emails WHERE id IN ({placeholders})"
-            conn.execute(query, selected_ids)
+            messages = conn.execute("SELECT id, subject, body, body_type FROM received_emails WHERE recipient = ? ORDER BY id DESC LIMIT 50", (recipient_mail,)).fetchall()
+            for msg in messages:
+                subject = (msg['subject'] or "").lower().strip()
+                if any(subject.startswith(keyword) for keyword in subject_keywords):
+                    return Response(msg['body'], mimetype=f"{msg['body_type'] or 'text/html'}; charset=utf-8")
+            return jsonify({"error": "Verification email not found"}), 404
+        finally:
+            if conn: conn.close()
+    @app.route('/delete_selected_emails', methods=['POST'])
+    @login_required
+    @admin_required
+    def delete_selected_emails():
+        selected_ids = request.form.getlist('selected_ids')
+        if selected_ids:
+            conn = get_db_conn()
+            try:
+                placeholders = ','.join('?' for _ in selected_ids)
+                query = f"DELETE FROM received_emails WHERE id IN ({placeholders})"
+                conn.execute(query, selected_ids)
+                conn.commit()
+            finally:
+                if conn: conn.close()
+        return redirect(request.referrer or url_for('admin_view'))
+    @app.route('/delete_all_emails', methods=['POST'])
+    @login_required
+    @admin_required
+    def delete_all_emails():
+        conn = get_db_conn()
+        try:
+            conn.execute("DELETE FROM received_emails")
             conn.commit()
         finally:
             if conn: conn.close()
-    return redirect(request.referrer or url_for('admin_view'))
-@app.route('/delete_all_emails', methods=['POST'])
-@login_required
-@admin_required
-def delete_all_emails():
-    conn = get_db_conn()
-    try:
-        conn.execute("DELETE FROM received_emails")
-        conn.commit()
-    finally:
-        if conn: conn.close()
-    return redirect(url_for('admin_view'))
-@app.route('/view_email/<int:email_id>')
-@login_required
-def view_email_detail(email_id):
-    conn = get_db_conn()
-    if session.get('is_admin'):
-        email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
-    else:
-        email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND recipient = ?", (email_id, session['user_email'])).fetchone()
+        return redirect(url_for('admin_view'))
+    @app.route('/view_email/<int:email_id>')
+    @login_required
+    def view_email_detail(email_id):
+        conn = get_db_conn()
+        if session.get('is_admin'):
+            email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
+        else:
+            email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND recipient = ?", (email_id, session['user_email'])).fetchone()
+        
+        if not email:
+            conn.close()
+            return "邮件未找到或无权查看", 404
 
-    if not email:
+        if not email['is_read']:
+            conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
         conn.close()
-        return "邮件未找到或无权查看", 404
+        
+        sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
+        _, sender_address = parseaddr(email['sender'])
+        is_replyable_address = '@' in (sender_address or '')
 
-    if not email['is_read']:
-        conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
-    conn.close()
+        reply_button_html = ''
+        if not sending_enabled:
+            reply_button_html = '<a href="#" class="btn disabled" title="发件功能未配置，无法回复">回复</a>'
+        elif not is_replyable_address:
+            reply_button_html = '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
+        else:
+            reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>'
 
-    sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
-    _, sender_address = parseaddr(email['sender'])
-    is_replyable_address = '@' in (sender_address or '')
+        body_content = email['body'] or ''
+        if 'text/html' in (email['body_type'] or ''):
+            email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
+        else:
+            email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
 
-    reply_button_html = ''
-    if not sending_enabled:
-        reply_button_html = '<a href="#" class="btn disabled" title="发件功能未配置，无法回复">回复</a>'
-    elif not is_replyable_address:
-        reply_button_html = '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
-    else:
-        reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>'
+        return render_template_string(f'''
+            <!DOCTYPE html><html><head><title>邮件详情</title>
+            <style>
+                body {{ margin: 0; font-family: sans-serif; }}
+                .top-bar {{ display: flex; align-items: center; justify-content: flex-start; padding: 8px 15px; background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }}
+                .btn {{ text-decoration: none; display: inline-block; padding: 8px 15px; border-radius: 4px; color: white; background-color: #007bff; transition: background-color 0.2s; }}
+                .btn:hover {{ background-color: #0056b3; }}
+                .btn.disabled {{ background-color: #6c757d; cursor: not-allowed; }}
+            </style></head><body>
+                <div class="top-bar">{reply_button_html}</div>
+                {email_display}
+            </body></html>
+        ''')
 
-    body_content = email['body'] or ''
-    if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
-    else:
-        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
-
-    return render_template_string(f'''
-        <!DOCTYPE html><html><head><title>邮件详情</title>
-        <style>
-            body {{ margin: 0; font-family: sans-serif; }}
-            .top-bar {{ display: flex; align-items: center; justify-content: flex-start; padding: 8px 15px; background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }}
-            .btn {{ text-decoration: none; display: inline-block; padding: 8px 15px; border-radius: 4px; color: white; background-color: #007bff; transition: background-color 0.2s; }}
-            .btn:hover {{ background-color: #0056b3; }}
-            .btn.disabled {{ background-color: #6c757d; cursor: not-allowed; }}
-        </style></head><body>
-            <div class="top-bar">{reply_button_html}</div>
-            {email_display}
-        </body></html>
-    ''')
-
-@app.route('/view_email_token/<int:email_id>')
-def view_email_token_detail(email_id):
-    token = request.args.get('token')
-    if token != SPECIAL_VIEW_TOKEN: return "无效的Token", 403
-    conn = get_db_conn()
-    email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
-    conn.close()
-    if not email: return "邮件未找到", 404
-    body_content = email['body'] or ''
-    if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
-    else:
-        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
-    return Response(email_display, mimetype="text/html; charset=utf-8")
-@app.route('/manage_users', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def manage_users():
-    conn = get_db_conn()
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action == 'add':
-            email, password = request.form.get('email'), request.form.get('password')
-            if email and password:
-                try:
-                    conn.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
-                    conn.commit(); flash(f"用户 {email} 添加成功", 'success')
-                except sqlite3.IntegrityError:
-                    flash(f"用户 {email} 已存在", 'error')
-        elif action == 'delete':
-            user_id = request.form.get('user_id')
-            conn.execute("DELETE FROM users WHERE id = ? AND email != ?", (user_id, ADMIN_USERNAME)); conn.commit(); flash("用户已删除", 'success')
-    users = conn.execute("SELECT id, email FROM users WHERE email != ?", (ADMIN_USERNAME,)).fetchall()
-    conn.close()
-    return render_template_string('''
-        <!DOCTYPE html><html><head><title>管理用户 - {{SYSTEM_TITLE}}</title><style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
-            .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h2, h3 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
-            form { margin-bottom: 2em; padding: 1.5em; border: 1px solid #ddd; border-radius: 5px; background: #fdfdfd; }
-            form.inline-form { display: inline; border: none; padding: 0; margin: 0; background: none; }
-            input[type="email"], input[type="password"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-            button { padding: 10px 15px; border: none; border-radius: 4px; color: white; cursor: pointer; transition: background-color 0.2s; }
-            button.add { background-color: #28a745; } button.add:hover { background-color: #218838; }
-            button.delete { background-color: #dc3545; } button.delete:hover { background-color: #c82333; }
-            ul { list-style: none; padding: 0; }
-            li { background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
-            li:last-child { border-bottom: none; }
-            .flash-success { color: green; font-weight: bold; margin-bottom: 1em; }
-            .flash-error { color: red; font-weight: bold; margin-bottom: 1em; } .nav-link { font-size: 1.2em; }
-        </style></head><body><div class="container">
-        <h2><a href="{{url_for('admin_view')}}" class="nav-link">&larr; 返回收件箱</a> | 管理用户</h2>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <p class="flash-{{ category }}">{{ message }}</p>
-            {% endfor %}
-        {% endwith %}
-        <h3>添加新用户</h3>
-        <form method="post">
-            <input type="hidden" name="action" value="add">
-            <input type="email" name="email" placeholder="新用户邮箱地址" required>
-            <input type="password" name="password" placeholder="新用户密码" required>
-            <button type="submit" class="add">添加用户</button>
-        </form>
-        <h3>现有用户</h3>
-        <ul>
-            {% for user in users %}
-            <li>
-                <span>{{user.email}}</span>
-                <form method="post" class="inline-form" onsubmit="return confirm('确定要删除该用户吗？');">
-                    <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="user_id" value="{{user.id}}">
-                    <button type="submit" class="delete">删除</button>
-                </form>
-            </li>
-            {% else %}<li>无普通用户</li>{% endfor %}
-        </ul>
-        </div></body></html>
-    ''', users=users, SYSTEM_TITLE=SYSTEM_TITLE)
-class CustomSMTPHandler:
-    async def handle_DATA(self, server, session, envelope):
+    @app.route('/view_email_token/<int:email_id>')
+    def view_email_token_detail(email_id):
+        token = request.args.get('token')
+        if token != SPECIAL_VIEW_TOKEN: return "无效的Token", 403
+        conn = get_db_conn()
+        email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
+        conn.close()
+        if not email: return "邮件未找到", 404
+        body_content = email['body'] or ''
+        if 'text/html' in (email['body_type'] or ''):
+            email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+        else:
+            email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
+        return Response(email_display, mimetype="text/html; charset=utf-8")
+    @app.route('/manage_users', methods=['GET', 'POST'])
+    @login_required
+    @admin_required
+    def manage_users():
+        conn = get_db_conn()
+        if request.method == 'POST':
+            action = request.form.get('action')
+            if action == 'add':
+                email, password = request.form.get('email'), request.form.get('password')
+                if email and password:
+                    try:
+                        conn.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
+                        conn.commit(); flash(f"用户 {email} 添加成功", 'success')
+                    except sqlite3.IntegrityError:
+                        flash(f"用户 {email} 已存在", 'error')
+            elif action == 'delete':
+                user_id = request.form.get('user_id')
+                conn.execute("DELETE FROM users WHERE id = ? AND email != ?", (user_id, ADMIN_USERNAME)); conn.commit(); flash("用户已删除", 'success')
+        users = conn.execute("SELECT id, email FROM users WHERE email != ?", (ADMIN_USERNAME,)).fetchall()
+        conn.close()
+        return render_template_string('''
+            <!DOCTYPE html><html><head><title>管理用户 - {{SYSTEM_TITLE}}</title><style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; display: flex; justify-content: center; padding-top: 4em; }
+                .container { width: 100%; max-width: 800px; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                h2, h3 { color: #333; } a { color: #007bff; text-decoration: none; } a:hover { text-decoration: underline; }
+                form { margin-bottom: 2em; padding: 1.5em; border: 1px solid #ddd; border-radius: 5px; background: #fdfdfd; }
+                form.inline-form { display: inline; border: none; padding: 0; margin: 0; background: none; }
+                input[type="email"], input[type="password"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+                button { padding: 10px 15px; border: none; border-radius: 4px; color: white; cursor: pointer; transition: background-color 0.2s; }
+                button.add { background-color: #28a745; } button.add:hover { background-color: #218838; }
+                button.delete { background-color: #dc3545; } button.delete:hover { background-color: #c82333; }
+                ul { list-style: none; padding: 0; }
+                li { background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+                li:last-child { border-bottom: none; }
+                .flash-success { color: green; font-weight: bold; margin-bottom: 1em; }
+                .flash-error { color: red; font-weight: bold; margin-bottom: 1em; } .nav-link { font-size: 1.2em; }
+            </style></head><body><div class="container">
+            <h2><a href="{{url_for('admin_view')}}" class="nav-link">&larr; 返回收件箱</a> | 管理用户</h2>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <p class="flash-{{ category }}">{{ message }}</p>
+                {% endfor %}
+            {% endwith %}
+            <h3>添加新用户</h3>
+            <form method="post">
+                <input type="hidden" name="action" value="add">
+                <input type="email" name="email" placeholder="新用户邮箱地址" required>
+                <input type="password" name="password" placeholder="新用户密码" required>
+                <button type="submit" class="add">添加用户</button>
+            </form>
+            <h3>现有用户</h3>
+            <ul>
+                {% for user in users %}
+                <li>
+                    <span>{{user.email}}</span>
+                    <form method="post" class="inline-form" onsubmit="return confirm('确定要删除该用户吗？');">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="user_id" value="{{user.id}}">
+                        <button type="submit" class="delete">删除</button>
+                    </form>
+                </li>
+                {% else %}<li>无普通用户</li>{% endfor %}
+            </ul>
+            </div></body></html>
+        ''', users=users, SYSTEM_TITLE=SYSTEM_TITLE)
+    class CustomSMTPHandler:
+        async def handle_DATA(self, server, session, envelope):
+            try:
+                process_email_data(','.join(envelope.rcpt_tos), envelope.content)
+                return '250 OK'
+            except Exception as e:
+                app.logger.error(f"处理邮件时发生严重错误: {e}")
+                return '500 Error processing message'
+    if __name__ == '__main__':
+        init_db()
+        controller = Controller(CustomSMTPHandler(), hostname='0.0.0.0', port=25)
+        controller.start()
+        app.logger.info("SMTP 服务器启动，监听端口 25...")
         try:
-            process_email_data(','.join(envelope.rcpt_tos), envelope.content)
-            return '250 OK'
-        except Exception as e:
-            app.logger.error(f"处理邮件时发生严重错误: {e}")
-            return '500 Error processing message'
-if __name__ == '__main__':
-    init_db()
-    controller = Controller(CustomSMTPHandler(), hostname='0.0.0.0', port=25)
-    controller.start()
-    app.logger.info("SMTP 服务器启动，监听端口 25...")
-    try:
-        asyncio.get_event_loop().run_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        controller.stop()
-        app.logger.info("SMTP 服务器已关闭。")
-EOF
+            asyncio.get_event_loop().run_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            controller.stop()
+            app.logger.info("SMTP 服务器已关闭。")
+    EOF
+        
+        echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
+        ufw allow ssh
+        ufw allow 25/tcp
+        ufw allow 80/tcp
+        ufw allow 443/tcp
+        ufw allow ${WEB_PORT}/tcp
+        ufw --force enable
 
-    echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
-    ufw allow ssh
-    ufw allow 25/tcp
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow ${WEB_PORT}/tcp
-    ufw --force enable
+        SMTP_SERVICE_CONTENT="[Unit]
+    Description=Custom Python SMTP Server (Receive-Only)
+    After=network.target
+    [Service]
+    User=root
+    Group=root
+    WorkingDirectory=${PROJECT_DIR}
+    ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    "
+        echo "${SMTP_SERVICE_CONTENT}" > /etc/systemd/system/mail-smtp.service
 
-    SMTP_SERVICE_CONTENT="[Unit]
-Description=Custom Python SMTP Server (Receive-Only)
-After=network.target
-[Service]
-User=root
-Group=root
-WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
-Restart=always
-[Install]
-WantedBy=multi-user.target
-"
-    echo "${SMTP_SERVICE_CONTENT}" > /etc/systemd/system/mail-smtp.service
+        API_SERVICE_CONTENT="[Unit]
+    Description=Gunicorn instance for Mail Web UI
+    After=network.target
+    [Service]
+    User=root
+    Group=root
+    WorkingDirectory=${PROJECT_DIR}
+    ExecStart=${PROJECT_DIR}/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:${WEB_PORT} 'app:app'
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    "
+        echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
 
-    API_SERVICE_CONTENT="[Unit]
-Description=Gunicorn instance for Mail Web UI
-After=network.target
-[Service]
-User=root
-Group=root
-WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PROJECT_DIR}/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:${WEB_PORT} 'app:app'
-Restart=always
-[Install]
-WantedBy=multi-user.target
-"
-    echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
+        echo -e "${GREEN}>>> 步骤 5: 替换占位符并启动服务...${NC}"
+        # BUG FIX: Escape variables to handle special characters in sed
+        ADMIN_USERNAME_SAFE=$(printf '%s\n' "$ADMIN_USERNAME" | sed -e 's/[\/&]/\\&/g')
+        ADMIN_PASSWORD_HASH_SAFE=$(printf '%s\n' "$ADMIN_PASSWORD_HASH" | sed -e 's/[\/&]/\\&/g')
+        FLASK_SECRET_KEY_SAFE=$(printf '%s\n' "$FLASK_SECRET_KEY" | sed -e 's/[\/&]/\\&/g')
+        SYSTEM_TITLE_SAFE=$(printf '%s\n' "$SYSTEM_TITLE" | sed -e 's/[\/&]/\\&/g')
+        SMTP_USER_SAFE=$(printf '%s\n' "$SMTP_USER" | sed -e 's/[\/&]/\\&/g')
+        SMTP_PASS_SAFE=$(printf '%s\n' "$SMTP_PASS" | sed -e 's/[\/&]/\\&/g')
+        DEFAULT_SENDER_EMAIL_SAFE=$(printf '%s\n' "$DEFAULT_SENDER_EMAIL" | sed -e 's/[\/&]/\\&/g')
+        PUBLIC_IP_SAFE=$(printf '%s\n' "$PUBLIC_IP" | sed -e 's/[\/&]/\\&/g')
 
-    echo -e "${GREEN}>>> 步骤 5: 替换占位符并启动服务...${NC}"
-    sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_USER}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_PASS}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL}#g" "${PROJECT_DIR}/app.py"
-    sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_USER_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_PASS_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL_SAFE}#g" "${PROJECT_DIR}/app.py"
+        sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP_SAFE}#g" "${PROJECT_DIR}/app.py"
+        
+        $PYTHON_CMD -c "from app import init_db; init_db()"
+        systemctl daemon-reload
+        systemctl restart mail-smtp.service mail-api.service
+        systemctl enable mail-smtp.service mail-api.service
 
-    $PYTHON_CMD -c "from app import init_db; init_db()"
-    systemctl daemon-reload
-    systemctl restart mail-smtp.service mail-api.service
-    systemctl enable mail-smtp.service mail-api.service
+        echo "================================================================"
+        echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
+        echo "================================================================"
+        echo ""
+        echo -e "您的网页版登录地址是："
+        echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
+        echo ""
+        if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
+            echo -e "${YELLOW}提醒：您未在安装时提供完整的Brevo发件信息。${NC}"
+            echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
+        fi
+        echo "================================================================"
+    }
 
-    echo "================================================================"
-    echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
-    echo "================================================================"
+    # --- 主逻辑 ---
+    clear
+    echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本${NC}"
+    echo "=============================================================="
+    echo "请选择要执行的操作:"
+    echo "1) 安装或更新邮件服务器核心服务"
+    echo "2) 卸载邮件服务器核心服务"
+    echo "3) 【可选】配置域名反代和SSL证书 (Caddy)"
     echo ""
-    echo -e "您的网页版登录地址是："
-    echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
-    echo ""
-    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
-        echo -e "${YELLOW}提醒：您未在安装时提供完整的MailerSend发件信息。${NC}"
-        echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
-    fi
-    echo "================================================================"
-}
+    read -p "请输入选项 [1-3]: " choice
 
-# --- 主逻辑 ---
-clear
-echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本${NC}"
-echo "=============================================================="
-echo "请选择要执行的操作:"
-echo "1) 安装或更新邮件服务器核心服务"
-echo "2) 卸载邮件服务器核心服务"
-echo "3) 【可选】配置域名反代和SSL证书 (Caddy)"
-echo ""
-read -p "请输入选项 [1-3]: " choice
-
-case $choice in
-    1)
-        install_server
-        ;;
-    2)
-        uninstall_server
-        ;;
-    3)
-        setup_caddy_reverse_proxy
-        ;;
-    *)
-        echo -e "${RED}无效选项，脚本退出。${NC}"
-        exit 1
-        ;;
-esac
+    case $choice in
+        1)
+            install_server
+            ;;
+        2)
+            uninstall_server
+            ;;
+        3)
+            setup_caddy_reverse_proxy
+            ;;
+        *)
+            echo -e "${RED}无效选项，脚本退出。${NC}"
+            exit 1
+            ;;
+    esac
+    ```
