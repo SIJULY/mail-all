@@ -1,9 +1,9 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (最终完美版)
+# 小龙女她爸邮局服务系统一键安装脚本 (Brevo最终版)
 #
 # 作者: 小龙女她爸
-# 日期: 2025-08-15
+# 日期: 2025-08-11
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -93,7 +93,7 @@ setup_caddy_reverse_proxy() {
         echo -e "${RED}错误：邮箱地址不能为空。${NC}"
         exit 1
     fi
-    
+
     WEB_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
     read -p "请确认您的邮件服务Web后台端口 [默认为 ${WEB_PORT}]: " USER_WEB_PORT
     WEB_PORT=${USER_WEB_PORT:-${WEB_PORT}}
@@ -104,10 +104,10 @@ setup_caddy_reverse_proxy() {
     reverse_proxy 127.0.0.1:${WEB_PORT}
     tls ${LETSENCRYPT_EMAIL}
 }"
-    
+
     mkdir -p /etc/caddy/conf.d/
     echo "${CADDYFILE_CONTENT}" > /etc/caddy/conf.d/mail_server.caddy
-    
+
     if ! grep -q "import /etc/caddy/conf.d/\*.caddy" /etc/caddy/Caddyfile; then
         echo -e "\nimport /etc/caddy/conf.d/*.caddy" >> /etc/caddy/Caddyfile
     fi
@@ -117,7 +117,7 @@ setup_caddy_reverse_proxy() {
         systemctl start caddy
     fi
     systemctl reload caddy
-    
+
     echo "================================================================"
     echo -e "${GREEN}🎉 恭喜！Caddy 反向代理配置完成！ 🎉${NC}"
     echo "================================================================"
@@ -139,10 +139,13 @@ install_server() {
         EXISTING_TITLE=$(grep -oP "SYSTEM_TITLE = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "轻量级邮件服务器")
         EXISTING_PORT=$(grep -oP '0.0.0.0:\K[0-9]+' /etc/systemd/system/mail-api.service 2>/dev/null || echo "2099")
         EXISTING_ADMIN=$(grep -oP "ADMIN_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "admin")
-        
-        USER_PROMPT="请输入您在MailerSend创建的SMTP用户名 (留空则使用旧值): "
-        PASS_PROMPT="请输入您在MailerSend获取的SMTP密码 (留空则使用旧值): "
-        SENDER_PROMPT="请输入您在MailerSend验证过的默认发件人邮箱 (留空则使用旧值): "
+        EXISTING_API_KEY=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_LOGIN_EMAIL=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+        EXISTING_SENDER_EMAIL=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
+
+        KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (留空则使用旧值): "
+        LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (留空则使用旧值): "
+        SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (留空则使用旧值): "
         PW_PROMPT="请为管理员账户 '${EXISTING_ADMIN}' 设置登录密码 (留空则不修改): "
     else
         IS_UPDATE=false
@@ -150,10 +153,13 @@ install_server() {
         EXISTING_TITLE="小龙女她爸邮局服务系统"
         EXISTING_PORT="2099"
         EXISTING_ADMIN="admin"
-        
-        USER_PROMPT="请输入您在MailerSend创建的SMTP用户名 (可留空): "
-        PASS_PROMPT="请输入您在MailerSend获取的SMTP密码 (可留空): "
-        SENDER_PROMPT="请输入您在MailerSend验证过的默认发件人邮箱 (可留空): "
+        EXISTING_API_KEY=""
+        EXISTING_LOGIN_EMAIL=""
+        EXISTING_SENDER_EMAIL=""
+
+        KEY_PROMPT="请输入您的 Brevo SMTP 密钥(API v3 Key) (可留空): "
+        LOGIN_EMAIL_PROMPT="请输入您的 Brevo 账户登录邮箱 (可留空): "
+        SENDER_EMAIL_PROMPT="请输入您在Brevo验证过的默认发件人邮箱 (可留空): "
         PW_PROMPT="请为管理员账户 'admin' 设置一个复杂的登录密码: "
     fi
 
@@ -167,29 +173,26 @@ install_server() {
         exit 1
     fi
 
-    echo "--- MailerSend SMTP 发件服务配置 ---"
-    read -p "$USER_PROMPT" SMTP_USER
-    read -p "$PASS_PROMPT" SMTP_PASS
-    read -p "$SENDER_PROMPT" DEFAULT_SENDER_EMAIL
+    echo "--- Brevo SMTP 发件服务配置 ---"
+    read -p "$KEY_PROMPT" SMTP_API_KEY
+    read -p "$LOGIN_EMAIL_PROMPT" SMTP_LOGIN_EMAIL
+    read -p "$SENDER_EMAIL_PROMPT" DEFAULT_SENDER_EMAIL
 
     if [ "$IS_UPDATE" = true ]; then
-        EXISTING_USER=$(grep -oP "SMTP_USERNAME = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        EXISTING_PASS=$(grep -oP "SMTP_PASSWORD = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        EXISTING_SENDER=$(grep -oP "DEFAULT_SENDER = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null || echo "")
-        if [ -z "$SMTP_USER" ]; then SMTP_USER=${EXISTING_USER}; fi
-        if [ -z "$SMTP_PASS" ]; then SMTP_PASS=${EXISTING_PASS}; fi
-        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER}; fi
+        if [ -z "$SMTP_API_KEY" ]; then SMTP_API_KEY=${EXISTING_API_KEY}; fi
+        if [ -z "$SMTP_LOGIN_EMAIL" ]; then SMTP_LOGIN_EMAIL=${EXISTING_LOGIN_EMAIL}; fi
+        if [ -z "$DEFAULT_SENDER_EMAIL" ]; then DEFAULT_SENDER_EMAIL=${EXISTING_SENDER_EMAIL}; fi
     fi
 
     echo "--- 管理员账户设置 ---"
     read -p "请输入管理员登录名 [默认为: ${EXISTING_ADMIN}]: " ADMIN_USERNAME
     ADMIN_USERNAME=${ADMIN_USERNAME:-${EXISTING_ADMIN}}
-    
+
     read -sp "$PW_PROMPT" ADMIN_PASSWORD
     echo
-    
+
     FLASK_SECRET_KEY=$(openssl rand -hex 24)
-    
+
     echo -e "${BLUE}>>> 正在获取服务器公网IP...${NC}"
     PUBLIC_IP=$(curl -s icanhazip.com || echo "127.0.0.1")
     if [ -z "$PUBLIC_IP" ]; then
@@ -203,19 +206,19 @@ install_server() {
     apt-get update
     apt-get -y upgrade
     apt-get -y install python3-pip python3-venv ufw curl
-    
+
     echo -e "${GREEN}>>> 步骤 2: 创建应用程序目录和虚拟环境...${NC}"
     mkdir -p $PROJECT_DIR
     cd $PROJECT_DIR
     python3 -m venv venv
-    
+
     PIP_CMD="${PROJECT_DIR}/venv/bin/pip"
     PYTHON_CMD="${PROJECT_DIR}/venv/bin/python3"
     PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    
+
     echo -e "${BLUE}>>> Python 版本为 ${PYTHON_VERSION}。正在安装依赖...${NC}"
     $PIP_CMD install flask gunicorn aiosmtpd werkzeug
-    
+
     if [[ $(echo "$PYTHON_VERSION < 3.9" | bc -l 2>/dev/null) -eq 1 ]]; then
         echo -e "${YELLOW}>>> 检测到 Python 版本低于 3.9，正在安装 zoneinfo 兼容包...${NC}"
         $PIP_CMD install 'backports.zoneinfo; python_version < "3.9"'
@@ -237,7 +240,7 @@ install_server() {
             exit 1
         fi
     fi
-    
+
     echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
@@ -272,8 +275,8 @@ SERVER_PUBLIC_IP = "_PLACEHOLDER_SERVER_IP_"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '_PLACEHOLDER_FLASK_SECRET_KEY_'
 
-# --- MailerSend SMTP Configuration ---
-SMTP_SERVER = "smtp.mailersend.net"
+# --- Brevo SMTP Configuration ---
+SMTP_SERVER = "smtp-relay.brevo.com"
 SMTP_PORT = 587
 SMTP_USERNAME = "_PLACEHOLDER_SMTP_USERNAME_"
 SMTP_PASSWORD = "_PLACEHOLDER_SMTP_PASSWORD_"
@@ -320,7 +323,7 @@ def run_cleanup_if_needed():
     with open(LAST_CLEANUP_FILE, 'w') as f: f.write(now.isoformat())
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data)
-    
+
     subject = ""
     if msg['Subject']:
         subject_raw, encoding = decode_header(msg['Subject'])[0]
@@ -373,7 +376,7 @@ def process_email_data(to_address, raw_email_data):
         elif from_addr and '@' in from_addr: final_sender = from_addr
     if not final_sender: final_sender = "unknown@sender.com"
     app.logger.info(f"最终解析结果: 发件人 -> {final_sender}, 收件人 -> {final_recipient}")
-    
+
     body, body_type = "", "text/plain"
     if msg.is_multipart():
         for part in msg.walk():
@@ -492,7 +495,7 @@ def send_email_via_smtp(to_address, subject, body):
 @login_required
 def compose_email():
     if not SMTP_USERNAME or not SMTP_PASSWORD or not DEFAULT_SENDER:
-        flash('发件功能未配置。请在安装脚本中提供MailerSend的SMTP用户名、密码和已验证的发件人邮箱。', 'error')
+        flash('发件功能未配置。请在安装脚本中提供Brevo的SMTP密钥、登录邮箱和已验证的发件人邮箱。', 'error')
         return redirect(url_for('index'))
 
     form_data = {}
@@ -500,7 +503,7 @@ def compose_email():
         to_address = request.form.get('to')
         subject = request.form.get('subject')
         body = request.form.get('body')
-        
+
         if not to_address or not subject:
             flash('收件人和主题不能为空！', 'error')
             form_data = {'to': to_address, 'subject': subject, 'body': body}
@@ -521,7 +524,7 @@ def compose_email():
             if not session.get('is_admin'):
                 query += " AND recipient = ?"
                 params.append(session['user_email'])
-            
+
             original_email = conn.execute(query, params).fetchone()
             conn.close()
 
@@ -538,7 +541,7 @@ def compose_email():
                 beijing_tz = ZoneInfo("Asia/Shanghai")
                 utc_dt = datetime.strptime(original_email['timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                 bjt_str = utc_dt.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
-                
+
                 body_content = strip_tags_for_preview(original_email['body'] or '')
                 quoted_text = "\\n".join([f"> {line}" for line in body_content.splitlines()])
                 form_data['body'] = f"\\n\\n\\n--- On {bjt_str}, {original_email['sender']} wrote: ---\\n{quoted_text}"
@@ -594,7 +597,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
     else:
         endpoint = 'admin_view' if is_admin_view else 'view_emails'
         title_text = f"管理员视图 (共 {total_emails} 封)" if is_admin_view else f"收件箱 ({session.get('user_email', '')} - 共 {total_emails} 封)"
-    
+
     processed_emails = []
     beijing_tz = ZoneInfo("Asia/Shanghai")
     sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
@@ -818,7 +821,7 @@ def view_email_detail(email_id):
         email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
     else:
         email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND recipient = ?", (email_id, session['user_email'])).fetchone()
-    
+
     if not email:
         conn.close()
         return "邮件未找到或无权查看", 404
@@ -826,7 +829,7 @@ def view_email_detail(email_id):
     if not email['is_read']:
         conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
     conn.close()
-    
+
     sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
     _, sender_address = parseaddr(email['sender'])
     is_replyable_address = '@' in (sender_address or '')
@@ -959,7 +962,7 @@ if __name__ == '__main__':
         controller.stop()
         app.logger.info("SMTP 服务器已关闭。")
 EOF
-    
+
     echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
     ufw allow ssh
     ufw allow 25/tcp
@@ -1005,7 +1008,7 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_PASS}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP}#g" "${PROJECT_DIR}/app.py"
-    
+
     $PYTHON_CMD -c "from app import init_db; init_db()"
     systemctl daemon-reload
     systemctl restart mail-smtp.service mail-api.service
