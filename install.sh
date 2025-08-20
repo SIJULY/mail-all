@@ -958,7 +958,7 @@ def manage_users():
         finally:
             controller.stop()
             app.logger.info("SMTP 服务器已关闭。")
-EOF
+    EOF
         
         echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
         ufw allow ssh
