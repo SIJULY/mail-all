@@ -1,10 +1,10 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (最终整合修复版)
+# 小龙女她爸邮局服务系统一键安装脚本 (最终决定版)
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 2.3 ( 采用Data URI方案，彻底修复HTML渲染BUG)
+# 版本: 3.0 
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -242,7 +242,7 @@ install_server() {
     echo -e "${GREEN}>>> 步骤 3: 写入核心Web应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
-import sqlite3, re, os, math, html, logging, sys, smtplib, base64
+import sqlite3, re, os, math, html, logging, sys, smtplib
 from functools import wraps
 from flask import Flask, request, Response, redirect, url_for, session, render_template_string, flash, get_flashed_messages, jsonify
 from email import message_from_bytes
@@ -822,39 +822,17 @@ def view_email_detail(email_id):
         conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,)); conn.commit()
     conn.close()
     
-    sending_enabled = bool(SMTP_USERNAME and SMTP_PASSWORD and DEFAULT_SENDER)
-    _, sender_address = parseaddr(email['sender'])
-    is_replyable_address = '@' in (sender_address or '')
-
-    reply_button_html = ''
-    if not sending_enabled:
-        reply_button_html = '<a href="#" class="btn disabled" title="发件功能未配置，无法回复">回复</a>'
-    elif not is_replyable_address:
-        reply_button_html = '<a href="#" class="btn disabled" title="无法识别有效的发件人地址">无法回复</a>'
-    else:
-        reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>'
-
+    # --- 决定性修复：采用直接返回Response的方案 ---
     body_content = email['body'] or ''
-    email_display = ''
-    if 'text/html' in (email['body_type'] or ''):
-        base64_encoded_body = base64.b64encode(body_content.encode('utf-8')).decode('ascii')
-        email_display = f'<iframe src="data:text/html;charset=utf-8;base64,{base64_encoded_body}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
+    body_type = email['body_type'] or 'text/plain'
+    if 'text/html' in body_type:
+        # 对于HTML邮件，直接返回内容，让浏览器渲染
+        return Response(body_content, mimetype='text/html; charset=utf-8')
     else:
-        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
-
-    return render_template_string(f'''
-        <!DOCTYPE html><html><head><title>邮件详情</title>
-        <style>
-            body {{ margin: 0; font-family: sans-serif; }}
-            .top-bar {{ display: flex; align-items: center; justify-content: flex-start; padding: 8px 15px; background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }}
-            .btn {{ text-decoration: none; display: inline-block; padding: 8px 15px; border-radius: 4px; color: white; background-color: #007bff; transition: background-color 0.2s; }}
-            .btn:hover {{ background-color: #0056b3; }}
-            .btn.disabled {{ background-color: #6c757d; cursor: not-allowed; }}
-        </style></head><body>
-            <div class="top-bar">{reply_button_html}</div>
-            {email_display}
-        </body></html>
-    ''')
+        # 对于纯文本，使用<pre>标签以保留格式
+        escaped_content = escape(body_content)
+        html_response = f'<!DOCTYPE html><html><head><title>Email</title></head><body style="font-family: monospace; white-space: pre-wrap;">{escaped_content}</body></html>'
+        return Response(html_response, mimetype='text/html; charset=utf-8')
 @app.route('/view_email_token/<int:email_id>')
 def view_email_token_detail(email_id):
     token = request.args.get('token')
@@ -863,13 +841,12 @@ def view_email_token_detail(email_id):
     email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
     conn.close()
     if not email: return "邮件未找到", 404
+    
+    # --- 统一逻辑：同样直接返回Response ---
     body_content = email['body'] or ''
-    if 'text/html' in (email['body_type'] or ''):
-        base64_encoded_body = base64.b64encode(body_content.encode('utf-8')).decode('ascii')
-        email_display = f'<iframe src="data:text/html;charset=utf-8;base64,{base64_encoded_body}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
-    else:
-        email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
-    return Response(email_display, mimetype="text/html; charset=utf-8")
+    body_type = email['body_type'] or 'text/plain'
+    return Response(body_content, mimetype=f'{body_type}; charset=utf-8')
+
 @app.route('/manage_users', methods=['GET', 'POST'])
 @login_required
 @admin_required
