@@ -238,7 +238,7 @@ install_server() {
         fi
     fi
     
-    echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
+echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
