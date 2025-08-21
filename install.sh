@@ -4,7 +4,7 @@
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 2.1 (整合所有修复，架构优化)
+# 版本: 2.2 (由 AI 修正HTML渲染终极BUG)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -837,7 +837,7 @@ def view_email_detail(email_id):
     body_content = email['body'] or ''
     email_display = ''
     if 'text/html' in (email['body_type'] or ''):
-        safe_body_for_srcdoc = body_content.replace('"', '&quot;')
+        safe_body_for_srcdoc = body_content.replace('&', '&amp;').replace('"', '&quot;')
         email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
@@ -865,8 +865,7 @@ def view_email_token_detail(email_id):
     if not email: return "邮件未找到", 404
     body_content = email['body'] or ''
     if 'text/html' in (email['body_type'] or ''):
-        # 修复：同样需要处理双引号问题
-        safe_body_for_srcdoc = body_content.replace('"', '&quot;')
+        safe_body_for_srcdoc = body_content.replace('&', '&amp;').replace('"', '&quot;')
         email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
