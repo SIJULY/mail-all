@@ -3,8 +3,8 @@
 # 小龙女她爸邮局服务系统一键安装脚本 (真正最终版)
 #
 # 作者: 小龙女她爸
-# 日期: 2025-08-16
-# 版本: 1.1 (由 AI 修复语法和逻辑错误)
+# 日期: 2025-08-22
+# 版本: 2.0 (重构服务架构，分离Web与SMTP服务)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -239,7 +239,7 @@ install_server() {
         fi
     fi
     
-    echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
+    echo -e "${GREEN}>>> 步骤 3: 写入核心Web应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
@@ -256,8 +256,6 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 from werkzeug.security import check_password_hash, generate_password_hash
-import asyncio
-from aiosmtpd.controller import Controller
 
 DB_FILE = 'emails.db'
 EMAILS_PER_PAGE = 50
@@ -939,28 +937,57 @@ def manage_users():
         </ul>
         </div></body></html>
     ''', users=users, SYSTEM_TITLE=SYSTEM_TITLE)
-    class CustomSMTPHandler:
-        async def handle_DATA(self, server, session, envelope):
-            try:
-                process_email_data(','.join(envelope.rcpt_tos), envelope.content)
-                return '250 OK'
-            except Exception as e:
-                app.logger.error(f"处理邮件时发生严重错误: {e}")
-                return '500 Error processing message'
-    if __name__ == '__main__':
-        init_db()
-        controller = Controller(CustomSMTPHandler(), hostname='0.0.0.0', port=25)
-        controller.start()
-        app.logger.info("SMTP 服务器启动，监听端口 25...")
-        try:
-            asyncio.get_event_loop().run_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            controller.stop()
-            app.logger.info("SMTP 服务器已关闭。")
 EOF
+
+    echo -e "${GREEN}>>> 步骤 3.5: 写入独立的SMTP服务代码 (smtp_server.py)...${NC}"
+    cat << 'EOF' > ${PROJECT_DIR}/smtp_server.py
+# -*- coding: utf-8 -*-
+# 这是一个专门用来运行SMTP收信服务的独立脚本
+import asyncio
+from aiosmtpd.controller import Controller
+import logging
+import sys
+
+# 需要从主应用app.py中导入邮件处理函数
+# 为此，我们将当前目录添加到系统路径中
+sys.path.append('/opt/mail_api')
+from app import process_email_data, init_db
+
+# 配置基础日志
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
+
+class CustomSMTPHandler:
+    async def handle_DATA(self, server, session, envelope):
+        try:
+            logging.info(f"正在为以下地址接收邮件: {', '.join(envelope.rcpt_tos)}")
+            process_email_data(','.join(envelope.rcpt_tos), envelope.content)
+            return '250 OK'
+        except Exception as e:
+            logging.error(f"处理邮件时发生错误: {e}", exc_info=True)
+            return '500 Error processing message'
+
+def main():
+    # 启动前，确保数据库已初始化
+    init_db()
     
+    # 启动SMTP控制器
+    controller = Controller(CustomSMTPHandler(), hostname='0.0.0.0', port=25)
+    controller.start()
+    logging.info("SMTP服务已启动，正在监听25端口...")
+    
+    try:
+        # 永久运行，直到进程被终止
+        asyncio.get_event_loop().run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        controller.stop()
+        logging.info("SMTP服务已关闭。")
+
+if __name__ == '__main__':
+    main()
+EOF
+
     echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
     ufw allow ssh
     ufw allow 25/tcp
@@ -969,6 +996,7 @@ EOF
     ufw allow ${WEB_PORT}/tcp
     ufw --force enable
 
+    # 修复：让SMTP服务执行新的独立脚本
     SMTP_SERVICE_CONTENT="[Unit]
 Description=Custom Python SMTP Server (Receive-Only)
 After=network.target
@@ -976,7 +1004,7 @@ After=network.target
 User=root
 Group=root
 WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
+ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/smtp_server.py
 Restart=always
 [Install]
 WantedBy=multi-user.target
@@ -1019,10 +1047,14 @@ WantedBy=multi-user.target
     sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL_SAFE}#g" "${PROJECT_DIR}/app.py"
     sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP_SAFE}#g" "${PROJECT_DIR}/app.py"
     
+    # 初始化数据库
     $PYTHON_CMD -c "from app import init_db; init_db()"
+    
     systemctl daemon-reload
-    systemctl restart mail-smtp.service mail-api.service
-    systemctl enable mail-smtp.service mail-api.service
+    systemctl restart mail-api.service
+    systemctl restart mail-smtp.service
+    systemctl enable mail-api.service
+    systemctl enable mail-smtp.service
 
     echo "================================================================"
     echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
