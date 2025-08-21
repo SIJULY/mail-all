@@ -4,6 +4,7 @@
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-16
+# 版本: 1.1 (由 AI 修复语法和逻辑错误)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -238,7 +239,7 @@ install_server() {
         fi
     fi
     
-echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
+    echo -e "${GREEN}>>> 步骤 3: 写入核心应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
 import sqlite3, re, os, math, html, logging, sys, smtplib
@@ -958,106 +959,109 @@ def manage_users():
         finally:
             controller.stop()
             app.logger.info("SMTP 服务器已关闭。")
-    EOF
-        
-        echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
-        ufw allow ssh
-        ufw allow 25/tcp
-        ufw allow 80/tcp
-        ufw allow 443/tcp
-        ufw allow ${WEB_PORT}/tcp
-        ufw --force enable
+EOF
+    
+    echo -e "${GREEN}>>> 步骤 4: 配置防火墙和系统服务...${NC}"
+    ufw allow ssh
+    ufw allow 25/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow ${WEB_PORT}/tcp
+    ufw --force enable
 
-        SMTP_SERVICE_CONTENT="[Unit]
-    Description=Custom Python SMTP Server (Receive-Only)
-    After=network.target
-    [Service]
-    User=root
-    Group=root
-    WorkingDirectory=${PROJECT_DIR}
-    ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
-    Restart=always
-    [Install]
-    WantedBy=multi-user.target
-    "
-        echo "${SMTP_SERVICE_CONTENT}" > /etc/systemd/system/mail-smtp.service
+    SMTP_SERVICE_CONTENT="[Unit]
+Description=Custom Python SMTP Server (Receive-Only)
+After=network.target
+[Service]
+User=root
+Group=root
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${PYTHON_CMD} ${PROJECT_DIR}/app.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+"
+    echo "${SMTP_SERVICE_CONTENT}" > /etc/systemd/system/mail-smtp.service
 
-        API_SERVICE_CONTENT="[Unit]
-    Description=Gunicorn instance for Mail Web UI
-    After=network.target
-    [Service]
-    User=root
-    Group=root
-    WorkingDirectory=${PROJECT_DIR}
-    ExecStart=${PROJECT_DIR}/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:${WEB_PORT} 'app:app'
-    Restart=always
-    [Install]
-    WantedBy=multi-user.target
-    "
-        echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
+    API_SERVICE_CONTENT="[Unit]
+Description=Gunicorn instance for Mail Web UI
+After=network.target
+[Service]
+User=root
+Group=root
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${PROJECT_DIR}/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:${WEB_PORT} 'app:app'
+Restart=always
+[Install]
+WantedBy=multi-user.target
+"
+    echo "${API_SERVICE_CONTENT}" > /etc/systemd/system/mail-api.service
 
-        echo -e "${GREEN}>>> 步骤 5: 替换占位符并启动服务...${NC}"
-        # BUG FIX: Escape variables to handle special characters in sed
-        ADMIN_USERNAME_SAFE=$(echo "$ADMIN_USERNAME" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        ADMIN_PASSWORD_HASH_SAFE=$(echo "$ADMIN_PASSWORD_HASH" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        FLASK_SECRET_KEY_SAFE=$(echo "$FLASK_SECRET_KEY" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        SYSTEM_TITLE_SAFE=$(echo "$SYSTEM_TITLE" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        SMTP_USER_SAFE=$(echo "$SMTP_USER" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        SMTP_PASS_SAFE=$(echo "$SMTP_PASS" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        DEFAULT_SENDER_EMAIL_SAFE=$(echo "$DEFAULT_SENDER_EMAIL" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
-        PUBLIC_IP_SAFE=$(echo "$PUBLIC_IP" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    echo -e "${GREEN}>>> 步骤 5: 替换占位符并启动服务...${NC}"
+    # BUG FIX: Escape variables to handle special characters in sed
+    ADMIN_USERNAME_SAFE=$(echo "$ADMIN_USERNAME" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    ADMIN_PASSWORD_HASH_SAFE=$(echo "$ADMIN_PASSWORD_HASH" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    FLASK_SECRET_KEY_SAFE=$(echo "$FLASK_SECRET_KEY" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    SYSTEM_TITLE_SAFE=$(echo "$SYSTEM_TITLE" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    # 关键逻辑修复：使用正确的变量名
+    SMTP_LOGIN_EMAIL_SAFE=$(echo "$SMTP_LOGIN_EMAIL" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    SMTP_API_KEY_SAFE=$(echo "$SMTP_API_KEY" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    DEFAULT_SENDER_EMAIL_SAFE=$(echo "$DEFAULT_SENDER_EMAIL" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
+    PUBLIC_IP_SAFE=$(echo "$PUBLIC_IP" | sed -e 's/[&/\]/\\&/g' -e 's/#/\\#/g')
 
-        sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_USER_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_PASS_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL_SAFE}#g" "${PROJECT_DIR}/app.py"
-        sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP_SAFE}#g" "${PROJECT_DIR}/app.py"
-        
-        $PYTHON_CMD -c "from app import init_db; init_db()"
-        systemctl daemon-reload
-        systemctl restart mail-smtp.service mail-api.service
-        systemctl enable mail-smtp.service mail-api.service
+    sed -i "s#_PLACEHOLDER_ADMIN_USERNAME_#${ADMIN_USERNAME_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_ADMIN_PASSWORD_HASH_#${ADMIN_PASSWORD_HASH_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_FLASK_SECRET_KEY_#${FLASK_SECRET_KEY_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SYSTEM_TITLE_#${SYSTEM_TITLE_SAFE}#g" "${PROJECT_DIR}/app.py"
+    # 关键逻辑修复：使用修正后的安全变量进行替换
+    sed -i "s#_PLACEHOLDER_SMTP_USERNAME_#${SMTP_LOGIN_EMAIL_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SMTP_PASSWORD_#${SMTP_API_KEY_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_DEFAULT_SENDER_#${DEFAULT_SENDER_EMAIL_SAFE}#g" "${PROJECT_DIR}/app.py"
+    sed -i "s#_PLACEHOLDER_SERVER_IP_#${PUBLIC_IP_SAFE}#g" "${PROJECT_DIR}/app.py"
+    
+    $PYTHON_CMD -c "from app import init_db; init_db()"
+    systemctl daemon-reload
+    systemctl restart mail-smtp.service mail-api.service
+    systemctl enable mail-smtp.service mail-api.service
 
-        echo "================================================================"
-        echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
-        echo "================================================================"
-        echo ""
-        echo -e "您的网页版登录地址是："
-        echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
-        echo ""
-        if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
-            echo -e "${YELLOW}提醒：您未在安装时提供完整的Brevo发件信息。${NC}"
-            echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
-        fi
-        echo "================================================================"
-    }
-
-    # --- 主逻辑 ---
-    clear
-    echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本${NC}"
-    echo "=============================================================="
-    echo "请选择要执行的操作:"
-    echo "1) 安装或更新邮件服务器核心服务"
-    echo "2) 卸载邮件服务器核心服务"
-    echo "3) 【可选】配置域名反代和SSL证书 (Caddy)"
+    echo "================================================================"
+    echo -e "${GREEN}🎉 恭喜！邮件服务器核心服务安装/更新完成！ 🎉${NC}"
+    echo "================================================================"
     echo ""
-    read -p "请输入选项 [1-3]: " choice
+    echo -e "您的网页版登录地址是："
+    echo -e "${YELLOW}http://${PUBLIC_IP}:${WEB_PORT}${NC}"
+    echo ""
+    # 关键逻辑修复：在提醒信息中使用正确的变量
+    if [ "$IS_UPDATE" = false ] && { [ -z "$SMTP_LOGIN_EMAIL" ] || [ -z "$SMTP_API_KEY" ] || [ -z "$DEFAULT_SENDER_EMAIL" ]; }; then
+        echo -e "${YELLOW}提醒：您未在安装时提供完整的Brevo发件信息。${NC}"
+        echo -e "发信功能暂时无法使用。请稍后手动编辑 ${PROJECT_DIR}/app.py 文件或重新运行安装程序。 "
+    fi
+    echo "================================================================"
+}
 
-    case $choice in
-        1)
-            install_server
-            ;;
-        2)
-            uninstall_server
-            ;;
-        3)
-            setup_caddy_reverse_proxy
-            ;;
-        *)
-            echo -e "${RED}无效选项，脚本退出。${NC}"
-            exit 1
-            ;;
-    esac
+# --- 主逻辑 ---
+clear
+echo -e "${BLUE}小龙女她爸邮局服务系统一键安装脚本${NC}"
+echo "=============================================================="
+echo "请选择要执行的操作:"
+echo "1) 安装或更新邮件服务器核心服务"
+echo "2) 卸载邮件服务器核心服务"
+echo "3) 【可选】配置域名反代和SSL证书 (Caddy)"
+echo ""
+read -p "请输入选项 [1-3]: " choice
+
+case $choice in
+    1)
+        install_server
+        ;;
+    2)
+        uninstall_server
+        ;;
+    3)
+        setup_caddy_reverse_proxy
+        ;;
+    *)
+        echo -e "${RED}无效选项，脚本退出。${NC}"
+        exit 1
+        ;;
+esac
