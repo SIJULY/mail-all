@@ -4,7 +4,7 @@
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 2.2 (由 AI 修正HTML渲染终极BUG)
+# 版本: 2.3 ( 采用Data URI方案，彻底修复HTML渲染BUG)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -242,7 +242,7 @@ install_server() {
     echo -e "${GREEN}>>> 步骤 3: 写入核心Web应用代码 (app.py)...${NC}"
     cat << 'EOF' > ${PROJECT_DIR}/app.py
 # -*- coding: utf-8 -*-
-import sqlite3, re, os, math, html, logging, sys, smtplib
+import sqlite3, re, os, math, html, logging, sys, smtplib, base64
 from functools import wraps
 from flask import Flask, request, Response, redirect, url_for, session, render_template_string, flash, get_flashed_messages, jsonify
 from email import message_from_bytes
@@ -837,8 +837,8 @@ def view_email_detail(email_id):
     body_content = email['body'] or ''
     email_display = ''
     if 'text/html' in (email['body_type'] or ''):
-        safe_body_for_srcdoc = body_content.replace('&', '&amp;').replace('"', '&quot;')
-        email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
+        base64_encoded_body = base64.b64encode(body_content.encode('utf-8')).decode('ascii')
+        email_display = f'<iframe src="data:text/html;charset=utf-8;base64,{base64_encoded_body}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
 
@@ -865,8 +865,8 @@ def view_email_token_detail(email_id):
     if not email: return "邮件未找到", 404
     body_content = email['body'] or ''
     if 'text/html' in (email['body_type'] or ''):
-        safe_body_for_srcdoc = body_content.replace('&', '&amp;').replace('"', '&quot;')
-        email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+        base64_encoded_body = base64.b64encode(body_content.encode('utf-8')).decode('ascii')
+        email_display = f'<iframe src="data:text/html;charset=utf-8;base64,{base64_encoded_body}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
     return Response(email_display, mimetype="text/html; charset=utf-8")
