@@ -4,7 +4,7 @@
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 3.0 (由 AI 重构显示逻辑，彻底修复所有渲染BUG)
+# 版本: 3.1 (修复邮件渲染BUG)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -229,8 +229,8 @@ install_server() {
         if [ "$IS_UPDATE" = true ]; then
             ADMIN_PASSWORD_HASH=$(grep -oP "ADMIN_PASSWORD_HASH = \"\K[^\"]+" ${PROJECT_DIR}/app.py 2>/dev/null)
             if [ -z "$ADMIN_PASSWORD_HASH" ]; then
-                 echo -e "${RED}错误：无法从现有文件中读取旧密码，请重新运行时设置一个新密码。${NC}"
-                 exit 1
+                echo -e "${RED}错误：无法从现有文件中读取旧密码，请重新运行时设置一个新密码。${NC}"
+                exit 1
             fi
             echo -e "${BLUE}>>> 已保留现有的管理员密码。${NC}"
         else
@@ -377,6 +377,7 @@ def process_email_data(to_address, raw_email_data):
             elif part.get_content_type() == 'text/plain':
                 body = part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8', errors='ignore'); body_type="text/plain"
     else:
+        body_type = msg.get_content_type()
         body = msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8', errors='ignore')
     conn = get_db_conn()
     conn.execute("INSERT INTO received_emails (recipient, sender, subject, body, body_type) VALUES (?, ?, ?, ?, ?)",
@@ -652,7 +653,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
                         <a href="{{url_for('manage_users')}}" class="btn btn-secondary">管理用户</a>
                     {% endif %}
                     {% if not token_view_context %}
-                         <a href="{{url_for('logout')}}" class="btn btn-danger">登出</a>
+                        <a href="{{url_for('logout')}}" class="btn btn-danger">登出</a>
                     {% endif %}
                 </div>
             </div>
