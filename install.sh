@@ -1,10 +1,10 @@
 #!/bin/bash
 # =================================================================================
-# 小龙女她爸邮局服务系统一键安装脚本 (真正最终版)
+# 小龙女她爸邮局服务系统一键安装脚本 (最终整合修复版)
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 2.0 (重构服务架构，分离Web与SMTP服务)
+# 版本: 2.1 (整合所有修复，架构优化)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -327,22 +327,18 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
-    # --- 反垃圾邮件的核心判断 ---
     spam_keywords = ["email tester !", "smtp test"]
     subject_lower = subject.lower()
 
-    # 1. 检查主题是否包含服务器IP
     if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
         if SERVER_PUBLIC_IP in subject:
             app.logger.warning(f"SPAM REJECTED: Subject contains server IP. From: {msg.get('From')}, Subject: '{subject}'")
             return
 
-    # 2. 检查主题是否包含定义的垃圾关键词 (不区分大小写)
     for keyword in spam_keywords:
         if keyword in subject_lower:
             app.logger.warning(f"SPAM REJECTED: Subject contains keyword '{keyword}'. From: {msg.get('From')}, Subject: '{subject}'")
             return
-    # --- 判断结束 ---
 
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
     app.logger.info(f"SMTP信封接收地址: {to_address}")
@@ -839,8 +835,10 @@ def view_email_detail(email_id):
         reply_button_html = f'<a href="{url_for("compose_email", reply_to_id=email_id)}" class="btn">回复</a>'
 
     body_content = email['body'] or ''
+    email_display = ''
     if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
+        safe_body_for_srcdoc = body_content.replace('"', '&quot;')
+        email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 50px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1em;">{escape(body_content)}</pre>'
 
@@ -857,7 +855,6 @@ def view_email_detail(email_id):
             {email_display}
         </body></html>
     ''')
-
 @app.route('/view_email_token/<int:email_id>')
 def view_email_token_detail(email_id):
     token = request.args.get('token')
@@ -868,7 +865,9 @@ def view_email_token_detail(email_id):
     if not email: return "邮件未找到", 404
     body_content = email['body'] or ''
     if 'text/html' in (email['body_type'] or ''):
-        email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+        # 修复：同样需要处理双引号问题
+        safe_body_for_srcdoc = body_content.replace('"', '&quot;')
+        email_display = f'<iframe srcdoc="{safe_body_for_srcdoc}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
     else:
         email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
     return Response(email_display, mimetype="text/html; charset=utf-8")
