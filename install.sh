@@ -327,7 +327,7 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
-    spam_keywords = ["email tester !", "smtp test"]
+    spam_keywords = ["email tester!", "smtp test"]
     subject_lower = subject.lower()
 
     if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
