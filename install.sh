@@ -4,7 +4,7 @@
 #
 # 作者: 小龙女她爸
 # 日期: 2025-08-22
-# 版本: 3.1 (修复邮件渲染BUG)
+# 版本: 3.2 (增强反垃圾邮件逻辑)
 # =================================================================================
 
 # --- 颜色定义 ---
@@ -327,7 +327,8 @@ def process_email_data(to_address, raw_email_data):
         else: subject = str(subject_raw)
     subject = subject.strip()
 
-    spam_keywords = ["email tester!", "smtp test"]
+    # --- 增强版反垃圾邮件逻辑 ---
+    spam_keywords = ["email tester", "smtp test"]
     subject_lower = subject.lower()
 
     if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1":
@@ -336,9 +337,11 @@ def process_email_data(to_address, raw_email_data):
             return
 
     for keyword in spam_keywords:
-        if keyword in subject_lower:
+        # 使用正则表达式进行更灵活的匹配
+        if re.search(keyword, subject_lower):
             app.logger.warning(f"SPAM REJECTED: Subject contains keyword '{keyword}'. From: {msg.get('From')}, Subject: '{subject}'")
             return
+    # --- 判断结束 ---
 
     app.logger.info("="*20 + " 开始处理一封新邮件 " + "="*20)
     app.logger.info(f"SMTP信封接收地址: {to_address}")
@@ -688,7 +691,7 @@ def render_email_list_page(emails_data, page, total_pages, total_emails, search_
                 <tr class="{{'unread' if not mail.is_read else ''}}">
                     <td style="text-align: center;"><input type="checkbox" name="selected_ids" value="{{mail.id}}" {% if not is_admin_view %}style="display:none;"{% endif %}></td>
                     <td>{{mail.bjt_str}}</td>
-                    <td>{{mail.subject|e}} <a href="{{ url_for('view_email_detail', email_id=mail.id) }}" target="_blank" class="view-link" title="新窗口打开">↳</a></td>
+                    <td>{{mail.subject|e}} <a href="{{ url_for('view_email_detail', email_id=mail.id) }}" class="view-link" title="新窗口打开">↳</a></td>
                     <td>
                         {% if mail.is_code %}<span class="preview-code">{{mail.preview_text|e}}</span>
                         {% else %}<div class="preview-text" title="{{mail.preview_text|e}}">{{mail.preview_text|e}}</div>{% endif %}
