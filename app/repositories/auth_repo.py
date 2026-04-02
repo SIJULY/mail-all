@@ -43,8 +43,9 @@ def add_user(email, password_hash):
 def delete_user(user_id):
     conn = get_db_conn()
     try:
-        conn.execute("DELETE FROM users WHERE id = ? AND email != ?", (user_id, ADMIN_USERNAME))
+        result = conn.execute("DELETE FROM users WHERE id = ? AND email != ?", (user_id, ADMIN_USERNAME))
         conn.commit()
+        return result.rowcount
     finally:
         conn.close()
 

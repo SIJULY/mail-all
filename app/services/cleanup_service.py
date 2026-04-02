@@ -7,6 +7,8 @@ from app.config import LAST_CLEANUP_FILE
 from app.constants import CLEANUP_INTERVAL_DAYS, EMAILS_TO_KEEP
 from app.repositories.db import get_db_conn
 
+TRASH_RETENTION_DAYS = 30
+
 
 def run_cleanup_if_needed():
     now = datetime.now()
@@ -21,7 +23,18 @@ def run_cleanup_if_needed():
 
     conn = get_db_conn()
     conn.execute(
-        f"DELETE FROM received_emails WHERE id NOT IN (SELECT id FROM received_emails ORDER BY id DESC LIMIT {EMAILS_TO_KEEP})"
+        "DELETE FROM received_email_attachments WHERE email_id IN (SELECT id FROM received_emails WHERE ifnull(is_deleted, 0) = 1 AND deleted_at IS NOT NULL AND deleted_at < datetime('now', ?))",
+        (f"-{TRASH_RETENTION_DAYS} days",),
+    )
+    conn.execute(
+        "DELETE FROM received_emails WHERE ifnull(is_deleted, 0) = 1 AND deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)",
+        (f"-{TRASH_RETENTION_DAYS} days",),
+    )
+    conn.execute(
+        f"DELETE FROM received_email_attachments WHERE email_id IN (SELECT id FROM received_emails WHERE ifnull(is_deleted, 0) = 0 AND id NOT IN (SELECT id FROM received_emails WHERE ifnull(is_deleted, 0) = 0 ORDER BY id DESC LIMIT {EMAILS_TO_KEEP}))"
+    )
+    conn.execute(
+        f"DELETE FROM received_emails WHERE ifnull(is_deleted, 0) = 0 AND id NOT IN (SELECT id FROM received_emails WHERE ifnull(is_deleted, 0) = 0 ORDER BY id DESC LIMIT {EMAILS_TO_KEEP})"
     )
     conn.commit()
     conn.close()

@@ -7,6 +7,10 @@ from app.repositories.db import get_db_conn
 
 
 def register_api_routes(app):
+    @app.route("/api/health", methods=["GET"])
+    def api_health():
+        return jsonify({"status": "ok"})
+
     @app.route("/api/emails", methods=["GET"])
     def api_emails_dispatch():
         moemail_token = request.headers.get(MOEMAIL_API_KEY_HEADER, "").strip()
@@ -21,3 +25,5 @@ def register_api_routes(app):
 
 
 __all__ = ["register_api_routes"]
+
+# keep file timestamp/content synchronized for import cache stability

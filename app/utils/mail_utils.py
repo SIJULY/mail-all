@@ -71,3 +71,11 @@ def generate_local_part(length: int = 10) -> str:
     prefix = "".join(random.choices(string.ascii_lowercase, k=max(3, length - 3)))
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=3))
     return (prefix + suffix)[:length]
+
+
+
+def generate_subdomain_label(min_length: int = 3, max_length: int = 5) -> str:
+    min_length = max(1, int(min_length or 3))
+    max_length = max(min_length, int(max_length or 5))
+    length = random.randint(min_length, max_length)
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))

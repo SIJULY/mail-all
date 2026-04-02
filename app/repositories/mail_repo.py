@@ -4,7 +4,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from app.repositories.db import get_db_conn
-from app.utils.mail_utils import normalize_domain, normalize_email_address
+from app.utils.mail_utils import generate_subdomain_label, normalize_domain, normalize_email_address
 
 
 def get_managed_mailbox_by_id(mailbox_id: Any):
@@ -90,6 +90,32 @@ def get_primary_domain() -> Optional[str]:
         return normalize_domain(row["domain"]) if row else None
     finally:
         conn.close()
+
+
+
+def get_primary_domain_row() -> Optional[sqlite3.Row]:
+    conn = get_db_conn()
+    try:
+        return conn.execute(
+            "SELECT * FROM managed_domains WHERE is_primary = 1 LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+
+def get_enabled_domain_rows() -> List[sqlite3.Row]:
+    return get_managed_domains(include_inactive=False)
+
+
+
+def materialize_domain_for_mailbox(domain_row: sqlite3.Row) -> str:
+    base_domain = normalize_domain(domain_row["domain"])
+    if not base_domain:
+        return ""
+    if domain_row["is_wildcard"]:
+        return f"{generate_subdomain_label(3, 5)}.{base_domain}"
+    return base_domain
 
 
 

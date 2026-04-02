@@ -18,7 +18,10 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL)"
     )
     c.execute(
-        "CREATE TABLE IF NOT EXISTS received_emails (id INTEGER PRIMARY KEY, recipient TEXT, sender TEXT, subject TEXT, body TEXT, body_type TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, is_read BOOLEAN DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS received_emails (id INTEGER PRIMARY KEY, recipient TEXT, sender TEXT, subject TEXT, body TEXT, body_type TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, is_read BOOLEAN DEFAULT 0, is_deleted BOOLEAN DEFAULT 0, deleted_at DATETIME, is_starred BOOLEAN DEFAULT 0, is_important BOOLEAN DEFAULT 0)"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS received_email_attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL, filename TEXT, content_type TEXT, file_size INTEGER DEFAULT 0, content BLOB, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     )
     c.execute(
         "CREATE TABLE IF NOT EXISTS managed_mailboxes (id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, local_part TEXT, domain TEXT, source TEXT DEFAULT 'moemail_api', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, is_active BOOLEAN DEFAULT 1)"
@@ -77,6 +80,18 @@ def init_db():
     columns = [row["name"] for row in cursor.fetchall()]
     if "is_read" not in columns:
         cursor.execute("ALTER TABLE received_emails ADD COLUMN is_read BOOLEAN DEFAULT 0")
+        conn.commit()
+    if "is_deleted" not in columns:
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
+        conn.commit()
+    if "deleted_at" not in columns:
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN deleted_at DATETIME")
+        conn.commit()
+    if "is_starred" not in columns:
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN is_starred BOOLEAN DEFAULT 0")
+        conn.commit()
+    if "is_important" not in columns:
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN is_important BOOLEAN DEFAULT 0")
         conn.commit()
 
     cursor.execute("PRAGMA table_info(managed_domains)")

@@ -18,10 +18,10 @@ from app.utils.response import get_valid_per_page
 from app.utils.time_utils import parse_request_timestamp, row_timestamp_to_utc
 
 
-def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
+def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, nav_mode="inbox"):
     from app.services.smtp_service import get_smtp_config
 
-    context = build_mail_query_context(is_admin_view, recipient_override)
+    context = build_mail_query_context(is_admin_view, recipient_override, nav_mode=nav_mode)
     draft_count = 0
     sent_count = 0
 
@@ -46,14 +46,19 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
     selected_next_url = None
 
     if context["selected_id"]:
-        selected_email = get_email_detail_for_inline(context["selected_id"], is_admin_view, recipient_override)
+        selected_email = get_email_detail_for_inline(
+            context["selected_id"],
+            is_admin_view,
+            recipient_override,
+            include_deleted=(nav_mode == "trash"),
+        )
         if selected_email and context["filtered_ids"]:
             try:
                 idx = context["filtered_ids"].index(selected_email["id"])
                 if idx > 0:
                     prev_id = context["filtered_ids"][idx - 1]
                     selected_prev_url = build_page_url(
-                        "admin_view" if is_admin_view else "view_emails",
+                        "view_trash" if nav_mode == "trash" else ("admin_view" if is_admin_view else "view_emails"),
                         context["page"],
                         context["search_query"],
                         context["filter_type"],
@@ -64,7 +69,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
                 if idx < len(context["filtered_ids"]) - 1:
                     next_id = context["filtered_ids"][idx + 1]
                     selected_next_url = build_page_url(
-                        "admin_view" if is_admin_view else "view_emails",
+                        "view_trash" if nav_mode == "trash" else ("admin_view" if is_admin_view else "view_emails"),
                         context["page"],
                         context["search_query"],
                         context["filter_type"],
@@ -88,9 +93,12 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
         per_page=context["per_page"],
         selected_prev_url=selected_prev_url,
         selected_next_url=selected_next_url,
+        nav_mode=nav_mode,
         draft_items=[{"id": idx} for idx in range(draft_count)],
         sent_items=[],
         sent_count=sent_count,
+        inbox_count=context["inbox_count"],
+        trash_count=context["trash_count"],
     )
 
 
@@ -114,6 +122,7 @@ def register_mail_routes(app):
                 SELECT id, subject, body, body_type
                 FROM received_emails
                 WHERE lower(trim(recipient)) = lower(trim(?))
+                  AND ifnull(is_deleted, 0) = 0
                 ORDER BY id DESC
                 LIMIT 50
                 """,
@@ -148,6 +157,7 @@ def register_mail_routes(app):
                 SELECT id, recipient, sender, subject, body, body_type, timestamp, is_read
                 FROM received_emails
                 WHERE lower(trim(recipient)) = lower(trim(?))
+                  AND ifnull(is_deleted, 0) = 0
                 ORDER BY id DESC
                 LIMIT 100
                 """,
@@ -181,12 +191,14 @@ def register_mail_routes(app):
             matched_messages = fetch_matching_messages(conn)
             read_ids = [msg["id"] for msg in matched_messages if msg["is_read"]]
             if read_ids:
+                conn.executemany("DELETE FROM received_email_attachments WHERE email_id = ?", [(msg_id,) for msg_id in read_ids])
                 conn.executemany("DELETE FROM received_emails WHERE id = ?", [(msg_id,) for msg_id in read_ids])
                 conn.commit()
                 app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已自动删除 {len(read_ids)} 封已读验证码邮件")
                 matched_messages = fetch_matching_messages(conn)
             for msg in matched_messages:
                 if not msg["is_read"]:
+                    conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
                     conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
                     conn.commit()
                     app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
@@ -198,12 +210,14 @@ def register_mail_routes(app):
                 matched_messages = fetch_matching_messages(conn)
                 read_ids = [msg["id"] for msg in matched_messages if msg["is_read"]]
                 if read_ids:
+                    conn.executemany("DELETE FROM received_email_attachments WHERE email_id = ?", [(msg_id,) for msg_id in read_ids])
                     conn.executemany("DELETE FROM received_emails WHERE id = ?", [(msg_id,) for msg_id in read_ids])
                     conn.commit()
                     app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试前已自动删除 {len(read_ids)} 封已读验证码邮件")
                     matched_messages = fetch_matching_messages(conn)
                 for msg in matched_messages:
                     if not msg["is_read"]:
+                        conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
                         conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
                         conn.commit()
                         app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
@@ -220,7 +234,7 @@ def register_mail_routes(app):
         page = max(1, request.args.get("page", 1, type=int))
         search_query = request.args.get("search", "").strip()
         filter_type = request.args.get("filter", "all").strip().lower()
-        target = "admin_view" if session.get("is_admin") else "view_emails"
+        target = "view_trash" if request.args.get("nav_mode") == "trash" else ("admin_view" if session.get("is_admin") else "view_emails")
         return redirect(url_for(target, selected_id=email_id, page=page, search=search_query, filter=filter_type, per_page=per_page))
 
     @app.route("/view_email_token/<int:email_id>")
@@ -229,15 +243,27 @@ def register_mail_routes(app):
         if token != SPECIAL_VIEW_TOKEN:
             return "无效的Token", 403
         conn = get_db_conn()
-        email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
-        conn.close()
+        try:
+            email = conn.execute("SELECT * FROM received_emails WHERE id = ? AND ifnull(is_deleted, 0) = 0", (email_id,)).fetchone()
+            attachments = conn.execute(
+                "SELECT id, filename, content_type, file_size FROM received_email_attachments WHERE email_id = ? ORDER BY id ASC",
+                (email_id,),
+            ).fetchall()
+        finally:
+            conn.close()
         if not email:
             return "邮件未找到", 404
+        attachment_html = ""
+        if attachments:
+            links = []
+            for item in attachments:
+                links.append(f'<a href="/download_attachment/{item["id"]}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 12px;border:1px solid #dbe4ee;border-radius:10px;text-decoration:none;color:#1d4ed8;background:#fff;">下载 {html.escape(item["filename"] or "attachment")}</a>')
+            attachment_html = '<div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;background:#f8fafc;"><strong>附件：</strong>' + ''.join(links) + '</div>'
         body_content = email["body"] or ""
         if "text/html" in (email["body_type"] or ""):
-            email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+            email_display = attachment_html + f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
         else:
-            email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
+            email_display = attachment_html + f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
         return Response(email_display, mimetype="text/html; charset=utf-8")
 
 

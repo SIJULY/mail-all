@@ -32,10 +32,12 @@ def register_ui_routes(app):
 
         conn = get_db_conn()
         if session.get("is_admin"):
-            count = conn.execute("SELECT COUNT(*) FROM received_emails WHERE is_read = 0").fetchone()[0]
+            count = conn.execute(
+                "SELECT COUNT(*) FROM received_emails WHERE is_read = 0 AND ifnull(is_deleted, 0) = 0"
+            ).fetchone()[0]
         else:
             count = conn.execute(
-                "SELECT COUNT(*) FROM received_emails WHERE recipient = ? AND is_read = 0",
+                "SELECT COUNT(*) FROM received_emails WHERE recipient = ? AND is_read = 0 AND ifnull(is_deleted, 0) = 0",
                 (session["user_email"],),
             ).fetchone()[0]
         conn.close()
@@ -47,6 +49,14 @@ def register_ui_routes(app):
         from app.routes.mail_routes import base_view_logic
 
         return base_view_logic(is_admin_view=False)
+
+    @app.route("/trash")
+    @app.route("/trash/<int:email_id>")
+    @login_required
+    def view_trash(email_id=None):
+        from app.routes.mail_routes import base_view_logic
+
+        return base_view_logic(is_admin_view=bool(session.get("is_admin")), nav_mode="trash")
 
     def _load_nav_mailbox_data(include_sent_details=False):
         from app.repositories.db import get_db_conn
@@ -76,7 +86,7 @@ def register_ui_routes(app):
     @app.route("/drafts")
     @login_required
     def view_drafts():
-        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")))
+        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")), nav_mode="inbox")
         rows, sent_rows = _load_nav_mailbox_data(include_sent_details=False)
 
         draft_items = []
@@ -109,13 +119,15 @@ def register_ui_routes(app):
             draft_items=draft_items,
             sent_items=[],
             sent_count=len(sent_rows),
+            inbox_count=inbox_context["inbox_count"],
+            trash_count=inbox_context["trash_count"],
         )
 
     @app.route("/sent")
     @app.route("/sent/<int:sent_id>")
     @login_required
     def view_sent(sent_id=None):
-        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")))
+        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")), nav_mode="inbox")
         draft_rows, rows = _load_nav_mailbox_data(include_sent_details=True)
 
         sent_items = []
@@ -167,6 +179,8 @@ def register_ui_routes(app):
             draft_items=[{"id": row["id"]} for row in draft_rows],
             sent_items=sent_items,
             sent_count=len(rows),
+            inbox_count=inbox_context["inbox_count"],
+            trash_count=inbox_context["trash_count"],
         )
 
     @app.route("/compose", methods=["GET", "POST"])
@@ -184,7 +198,7 @@ def register_ui_routes(app):
 
         smtp_cfg = get_smtp_config()
         is_admin_view = bool(session.get("is_admin"))
-        context = build_mail_query_context(is_admin_view=is_admin_view)
+        context = build_mail_query_context(is_admin_view=is_admin_view, nav_mode="inbox")
         form_data = {"to": "", "subject": "", "body": "", "html_body": "", "editor_mode": "text", "attachments": []}
         draft_id = request.args.get("draft_id", type=int)
 
@@ -277,7 +291,7 @@ def register_ui_routes(app):
         if reply_to_id and not draft_id and not (form_data.get("to") or form_data.get("subject") or form_data.get("body") or form_data.get("html_body")):
             try:
                 conn = get_db_conn()
-                query = "SELECT * FROM received_emails WHERE id = ?"
+                query = "SELECT * FROM received_emails WHERE id = ? AND ifnull(is_deleted, 0) = 0"
                 params = [reply_to_id]
                 if not is_admin_view:
                     query += " AND recipient = ?"
@@ -324,6 +338,8 @@ def register_ui_routes(app):
             sent_items=[],
             current_draft_id=draft_id,
             sent_count=len(sent_rows),
+            inbox_count=context["inbox_count"],
+            trash_count=context["trash_count"],
         )
 
 

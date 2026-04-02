@@ -1,5 +1,6 @@
 """邮件消息处理服务模块。"""
 
+import os
 import re
 from email import message_from_bytes
 from email.header import decode_header, make_header
@@ -75,6 +76,31 @@ def extract_body_from_message(message: Message) -> str:
             parts.append(body)
 
     return re.sub(r"\s+", " ", "\n".join(parts)).strip()
+
+
+
+def extract_attachments_from_message(message: Message) -> List[Dict[str, object]]:
+    attachments: List[Dict[str, object]] = []
+    for part in message.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        content_disposition = str(part.get("Content-Disposition") or "").lower()
+        filename = decode_mime_header_value(part.get_filename() or "").strip()
+        if not filename and not content_disposition.startswith("attachment"):
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:
+            payload = b""
+        attachments.append(
+            {
+                "filename": os.path.basename(filename or "attachment"),
+                "content_type": (part.get_content_type() or "application/octet-stream").lower(),
+                "file_size": len(payload),
+                "content": payload,
+            }
+        )
+    return attachments
 
 
 
@@ -172,11 +198,27 @@ def process_email_data(to_address, raw_email_data):
         if "html" in (msg.get_content_type() or "").lower():
             body_type = "text/html"
 
+    attachments = extract_attachments_from_message(msg)
+
     conn = get_db_conn()
-    conn.execute(
-        "INSERT INTO received_emails (recipient, sender, subject, body, body_type) VALUES (?, ?, ?, ?, ?)",
-        (final_recipient, final_sender, subject, body, body_type),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO received_emails (recipient, sender, subject, body, body_type) VALUES (?, ?, ?, ?, ?)",
+            (final_recipient, final_sender, subject, body, body_type),
+        )
+        email_id = cursor.lastrowid
+        for attachment in attachments:
+            conn.execute(
+                "INSERT INTO received_email_attachments (email_id, filename, content_type, file_size, content) VALUES (?, ?, ?, ?, ?)",
+                (
+                    email_id,
+                    attachment["filename"],
+                    attachment["content_type"],
+                    attachment["file_size"],
+                    attachment["content"],
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
     run_cleanup_if_needed()
