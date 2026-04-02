@@ -66,7 +66,7 @@ def register_ui_routes(app):
         conn = get_db_conn()
         try:
             draft_rows = conn.execute(
-                "SELECT id, to_address, subject, updated_at FROM draft_emails WHERE lower(trim(owner_email)) = lower(trim(?)) ORDER BY updated_at DESC, id DESC",
+                "SELECT id, to_address, subject, updated_at FROM draft_emails WHERE lower(trim(owner_email)) = lower(trim(?)) ORDER BY id ASC",
                 (current_user,),
             ).fetchall()
             if include_sent_details:
@@ -99,7 +99,6 @@ def register_ui_routes(app):
                     "timestamp": row["updated_at"],
                     "status": "草稿",
                     "edit_url": url_for("compose_email", draft_id=row["id"]),
-                    "delete_url": url_for("delete_draft_email", draft_id=row["id"]),
                 }
             )
 
@@ -145,7 +144,6 @@ def register_ui_routes(app):
                 "timestamp": row["timestamp"],
                 "status": "已发送",
                 "open_url": url_for("view_sent", sent_id=row["id"]),
-                "delete_url": url_for("delete_sent_email", sent_id=row["id"]),
             }
             sent_items.append(item)
             if sent_id == row["id"]:
@@ -203,6 +201,29 @@ def register_ui_routes(app):
         flash("草稿已删除" if result.rowcount else "草稿不存在或无权删除", "success" if result.rowcount else "error")
         return redirect(url_for("view_drafts"))
 
+    @app.route("/delete_selected_drafts", methods=["POST"])
+    @login_required
+    def delete_selected_drafts():
+        from flask import flash
+        from app.repositories.db import get_db_conn
+
+        selected_ids = request.form.getlist("selected_ids")
+        if not selected_ids:
+            flash("请先选择要删除的草稿", "error")
+            return redirect(url_for("view_drafts"))
+        conn = get_db_conn()
+        try:
+            placeholders = ",".join("?" for _ in selected_ids)
+            result = conn.execute(
+                f"DELETE FROM draft_emails WHERE lower(trim(owner_email)) = lower(trim(?)) AND id IN ({placeholders})",
+                [session["user_email"]] + selected_ids,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        flash(f"已删除 {result.rowcount} 封草稿" if result.rowcount else "未删除任何草稿", "success" if result.rowcount else "error")
+        return redirect(url_for("view_drafts"))
+
     @app.route("/delete_sent/<int:sent_id>", methods=["POST"])
     @login_required
     def delete_sent_email(sent_id):
@@ -221,6 +242,31 @@ def register_ui_routes(app):
         finally:
             conn.close()
         flash("已发送邮件已删除" if result.rowcount else "邮件不存在或无权删除", "success" if result.rowcount else "error")
+        return redirect(url_for("view_sent"))
+
+    @app.route("/delete_selected_sent", methods=["POST"])
+    @login_required
+    def delete_selected_sent():
+        from flask import flash
+        from app.repositories.db import get_db_conn
+
+        selected_ids = request.form.getlist("selected_ids")
+        if not selected_ids:
+            flash("请先选择要删除的已发送邮件", "error")
+            return redirect(url_for("view_sent"))
+        current_user = (session.get("user_email") or "").strip()
+        default_sender = (get_smtp_config().get("default_sender") or "").strip()
+        conn = get_db_conn()
+        try:
+            placeholders = ",".join("?" for _ in selected_ids)
+            result = conn.execute(
+                f"DELETE FROM sent_emails WHERE id IN ({placeholders}) AND (lower(trim(owner_email)) = lower(trim(?)) OR (? != '' AND lower(trim(sender)) = lower(trim(?))))",
+                selected_ids + [current_user, default_sender, default_sender],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        flash(f"已删除 {result.rowcount} 封已发送邮件" if result.rowcount else "未删除任何已发送邮件", "success" if result.rowcount else "error")
         return redirect(url_for("view_sent"))
 
     @app.route("/compose", methods=["GET", "POST"])
