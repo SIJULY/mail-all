@@ -1,0 +1,231 @@
+"""邮件查看与 token 路由模块。"""
+
+import html
+import random
+import time
+from datetime import timedelta
+
+from flask import Response, jsonify, redirect, request, session, url_for
+from markupsafe import escape
+
+from app.config import SPECIAL_VIEW_TOKEN
+from app.repositories.db import get_db_conn
+from app.services.view_service import build_mail_query_context, build_page_url, get_email_detail_for_inline
+from app.ui.page_builders import render_email_list_page
+from app.utils.decorators import login_required
+from app.utils.mail_utils import extract_code_from_body, strip_tags_for_preview
+from app.utils.response import get_valid_per_page
+from app.utils.time_utils import parse_request_timestamp, row_timestamp_to_utc
+
+
+def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
+    context = build_mail_query_context(is_admin_view, recipient_override)
+
+    if mark_as_read:
+        conn = get_db_conn()
+        try:
+            ids_to_mark = [str(e["id"]) for e in context["emails_data"] if not e["is_read"]]
+            if ids_to_mark:
+                conn.execute(f"UPDATE received_emails SET is_read=1 WHERE id IN ({','.join(ids_to_mark)})")
+                conn.commit()
+        finally:
+            conn.close()
+
+    selected_email = None
+    selected_prev_url = None
+    selected_next_url = None
+
+    if context["selected_id"]:
+        selected_email = get_email_detail_for_inline(context["selected_id"], is_admin_view, recipient_override)
+        if selected_email and context["filtered_ids"]:
+            try:
+                idx = context["filtered_ids"].index(selected_email["id"])
+                if idx > 0:
+                    prev_id = context["filtered_ids"][idx - 1]
+                    selected_prev_url = build_page_url(
+                        "admin_view" if is_admin_view else "view_emails",
+                        context["page"],
+                        context["search_query"],
+                        context["filter_type"],
+                        context["token_context"],
+                        prev_id,
+                        context["per_page"],
+                    )
+                if idx < len(context["filtered_ids"]) - 1:
+                    next_id = context["filtered_ids"][idx + 1]
+                    selected_next_url = build_page_url(
+                        "admin_view" if is_admin_view else "view_emails",
+                        context["page"],
+                        context["search_query"],
+                        context["filter_type"],
+                        context["token_context"],
+                        next_id,
+                        context["per_page"],
+                    )
+            except ValueError:
+                pass
+
+    return render_email_list_page(
+        context["emails_data"],
+        context["page"],
+        context["total_pages"],
+        context["total_emails"],
+        context["search_query"],
+        is_admin_view,
+        token_view_context=context["token_context"],
+        filter_type=context["filter_type"],
+        selected_email=selected_email,
+        per_page=context["per_page"],
+        selected_prev_url=selected_prev_url,
+        selected_next_url=selected_next_url,
+    )
+
+
+
+def register_mail_routes(app):
+    @app.route("/Mail")
+    def view_mail_by_token():
+        token = request.args.get("token")
+        recipient_mail = request.args.get("mail")
+        if not token or token != SPECIAL_VIEW_TOKEN:
+            return jsonify({"error": "Invalid token"}), 401
+        if not recipient_mail:
+            return jsonify({"error": "mail parameter is missing"}), 400
+
+        old_keywords = ["verify your email address", "验证您的电子邮件地址", "e メールアドレスを検証してください", "verification code"]
+        new_keywords = ["chatgpt", "openai"]
+        conn = get_db_conn()
+        try:
+            messages = conn.execute(
+                """
+                SELECT id, subject, body, body_type
+                FROM received_emails
+                WHERE lower(trim(recipient)) = lower(trim(?))
+                ORDER BY id DESC
+                LIMIT 50
+                """,
+                (recipient_mail,),
+            ).fetchall()
+            for msg in messages:
+                subject = (msg["subject"] or "").lower().strip()
+                body = (msg["body"] or "").lower()
+                match_old = any(subject.startswith(k) for k in old_keywords)
+                match_new = any(k in subject for k in new_keywords) or any(k in body for k in new_keywords)
+                if match_old or match_new:
+                    return Response(msg["body"], mimetype=f"{msg['body_type'] or 'text/html'}; charset=utf-8")
+            return jsonify({"error": "Verification email not found"}), 404
+        finally:
+            conn.close()
+
+    @app.route("/MailCode")
+    def view_mail_code_by_token():
+        token = request.args.get("token")
+        recipient_mail = request.args.get("mail")
+        after = request.args.get("after") or request.args.get("min_ts") or request.args.get("otp_sent_at")
+        if not token or token != SPECIAL_VIEW_TOKEN:
+            return jsonify({"error": "Invalid token"}), 401
+        if not recipient_mail:
+            return jsonify({"error": "mail parameter is missing"}), 400
+
+        after_dt = parse_request_timestamp(after)
+
+        def fetch_matching_messages(conn):
+            messages = conn.execute(
+                """
+                SELECT id, recipient, sender, subject, body, body_type, timestamp, is_read
+                FROM received_emails
+                WHERE lower(trim(recipient)) = lower(trim(?))
+                ORDER BY id DESC
+                LIMIT 100
+                """,
+                (recipient_mail,),
+            ).fetchall()
+            matched = []
+            for msg in messages:
+                sender = (msg["sender"] or "").lower().strip()
+                subject = (msg["subject"] or "").strip()
+                body = msg["body"] or ""
+                body_type = msg["body_type"] or "text/plain"
+                ts = row_timestamp_to_utc(msg["timestamp"])
+                if after_dt and ts and ts < (after_dt - timedelta(seconds=1)):
+                    continue
+                preview_text = strip_tags_for_preview(body)
+                combined_text = f"{subject}\n{preview_text}"
+                combined_text_lower = combined_text.lower()
+                looks_like_openai = (
+                    "openai" in sender or "chatgpt" in combined_text_lower or "verification code" in combined_text_lower or "temporary verification code" in combined_text_lower or "log-in code" in combined_text_lower or "login code" in combined_text_lower or "your code is" in combined_text_lower
+                )
+                if not looks_like_openai:
+                    continue
+                code = extract_code_from_body(subject) or extract_code_from_body(preview_text)
+                if not code:
+                    continue
+                matched.append({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": body_type, "code": code, "is_read": msg["is_read"]})
+            return matched
+
+        conn = get_db_conn()
+        try:
+            matched_messages = fetch_matching_messages(conn)
+            read_ids = [msg["id"] for msg in matched_messages if msg["is_read"]]
+            if read_ids:
+                conn.executemany("DELETE FROM received_emails WHERE id = ?", [(msg_id,) for msg_id in read_ids])
+                conn.commit()
+                app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已自动删除 {len(read_ids)} 封已读验证码邮件")
+                matched_messages = fetch_matching_messages(conn)
+            for msg in matched_messages:
+                if not msg["is_read"]:
+                    conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
+                    conn.commit()
+                    app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                    return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
+            if matched_messages:
+                delay_seconds = random.randint(5, 10)
+                app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 当前匹配到的验证码邮件都已处理，等待 {delay_seconds} 秒后重试...")
+                time.sleep(delay_seconds)
+                matched_messages = fetch_matching_messages(conn)
+                read_ids = [msg["id"] for msg in matched_messages if msg["is_read"]]
+                if read_ids:
+                    conn.executemany("DELETE FROM received_emails WHERE id = ?", [(msg_id,) for msg_id in read_ids])
+                    conn.commit()
+                    app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试前已自动删除 {len(read_ids)} 封已读验证码邮件")
+                    matched_messages = fetch_matching_messages(conn)
+                for msg in matched_messages:
+                    if not msg["is_read"]:
+                        conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
+                        conn.commit()
+                        app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                        return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
+                return jsonify({"error": "Verification email not found"}), 404
+            return jsonify({"error": "Verification email not found"}), 404
+        finally:
+            conn.close()
+
+    @app.route("/view_email/<int:email_id>")
+    @login_required
+    def view_email_detail(email_id):
+        per_page = get_valid_per_page(request.args.get("per_page"))
+        page = max(1, request.args.get("page", 1, type=int))
+        search_query = request.args.get("search", "").strip()
+        filter_type = request.args.get("filter", "all").strip().lower()
+        target = "admin_view" if session.get("is_admin") else "view_emails"
+        return redirect(url_for(target, selected_id=email_id, page=page, search=search_query, filter=filter_type, per_page=per_page))
+
+    @app.route("/view_email_token/<int:email_id>")
+    def view_email_token_detail(email_id):
+        token = request.args.get("token")
+        if token != SPECIAL_VIEW_TOKEN:
+            return "无效的Token", 403
+        conn = get_db_conn()
+        email = conn.execute("SELECT * FROM received_emails WHERE id = ?", (email_id,)).fetchone()
+        conn.close()
+        if not email:
+            return "邮件未找到", 404
+        body_content = email["body"] or ""
+        if "text/html" in (email["body_type"] or ""):
+            email_display = f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+        else:
+            email_display = f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
+        return Response(email_display, mimetype="text/html; charset=utf-8")
+
+
+__all__ = ["base_view_logic", "register_mail_routes"]

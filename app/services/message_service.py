@@ -1,0 +1,178 @@
+"""邮件消息处理服务模块。"""
+
+import re
+from email import message_from_bytes
+from email.header import decode_header, make_header
+from email.message import Message
+from email.policy import default as email_policy
+from email.utils import parseaddr
+from typing import Dict, List
+
+from app.config import SERVER_PUBLIC_IP
+from app.repositories.db import get_db_conn
+from app.services.cleanup_service import run_cleanup_if_needed
+from app.utils.mail_utils import strip_tags_for_preview
+
+
+def serialize_moemail_message(row) -> Dict[str, str]:
+    return {
+        "id": str(row["id"]),
+        "from_address": row["sender"] or "",
+        "subject": row["subject"] or "",
+        "created_at": row["timestamp"],
+    }
+
+
+
+def decode_mime_header_value(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return str(value)
+
+
+
+def extract_body_from_message(message: Message) -> str:
+    parts: List[str] = []
+
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            content_type = (part.get_content_type() or "").lower()
+            if content_type not in ("text/plain", "text/html"):
+                continue
+            if str(part.get("Content-Disposition") or "").lower().startswith("attachment"):
+                continue
+            try:
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or "utf-8"
+                text = payload.decode(charset, errors="replace") if payload else ""
+            except Exception:
+                try:
+                    text = part.get_content()
+                except Exception:
+                    text = ""
+            if content_type == "text/html":
+                text = re.sub(r"<[^>]+>", " ", text)
+            if text:
+                parts.append(text)
+    else:
+        try:
+            payload = message.get_payload(decode=True)
+            charset = message.get_content_charset() or "utf-8"
+            body = payload.decode(charset, errors="replace") if payload else ""
+        except Exception:
+            try:
+                body = message.get_content()
+            except Exception:
+                body = str(message.get_payload() or "")
+        if "html" in (message.get_content_type() or "").lower():
+            body = re.sub(r"<[^>]+>", " ", body)
+        if body:
+            parts.append(body)
+
+    return re.sub(r"\s+", " ", "\n".join(parts)).strip()
+
+
+
+def process_email_data(to_address, raw_email_data):
+    msg = message_from_bytes(raw_email_data, policy=email_policy)
+    subject = decode_mime_header_value(msg.get("Subject", "")).strip()
+
+    spam_keywords = ["email tester !", "smtp test"]
+    subject_lower = subject.lower()
+    if SERVER_PUBLIC_IP and SERVER_PUBLIC_IP != "127.0.0.1" and SERVER_PUBLIC_IP in subject:
+        return
+    for keyword in spam_keywords:
+        if keyword in subject_lower:
+            return
+
+    final_recipient = None
+    for header_name in ["Delivered-To", "X-Original-To", "X-Forwarded-To", "To"]:
+        header_value = msg.get(header_name)
+        if header_value:
+            _, recipient_addr = parseaddr(str(header_value))
+            if recipient_addr and "@" in recipient_addr:
+                final_recipient = recipient_addr.strip().lower()
+                break
+    if not final_recipient:
+        final_recipient = str(to_address).strip().lower()
+
+    final_sender = None
+    icloud_hme_header = msg.get("X-ICLOUD-HME")
+    if icloud_hme_header:
+        match = re.search(r"s=([^;]+)", str(icloud_hme_header))
+        if match:
+            final_sender = match.group(1)
+
+    if not final_sender:
+        reply_to_header = msg.get("Reply-To", "")
+        from_header = msg.get("From", "")
+        _, reply_to_addr = parseaddr(str(reply_to_header))
+        _, from_addr = parseaddr(str(from_header))
+        if reply_to_addr and "@" in reply_to_addr:
+            final_sender = reply_to_addr
+        elif from_addr and "@" in from_addr:
+            final_sender = from_addr
+
+    if not final_sender:
+        final_sender = "unknown@sender.com"
+
+    body_type = "text/plain"
+    body = ""
+    html_body = None
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            content_type = (part.get_content_type() or "").lower()
+            if str(part.get("Content-Disposition") or "").lower().startswith("attachment"):
+                continue
+            if content_type == "text/html":
+                try:
+                    payload = part.get_payload(decode=True)
+                    charset = part.get_content_charset() or "utf-8"
+                    html_body = payload.decode(charset, errors="ignore") if payload else ""
+                except Exception:
+                    try:
+                        html_body = part.get_content()
+                    except Exception:
+                        html_body = ""
+                body_type = "text/html"
+                body = html_body or body
+                break
+            elif content_type == "text/plain" and not body:
+                try:
+                    payload = part.get_payload(decode=True)
+                    charset = part.get_content_charset() or "utf-8"
+                    body = payload.decode(charset, errors="ignore") if payload else ""
+                except Exception:
+                    try:
+                        body = part.get_content()
+                    except Exception:
+                        body = ""
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            charset = msg.get_content_charset() or "utf-8"
+            body = payload.decode(charset, errors="ignore") if payload else ""
+        except Exception:
+            try:
+                body = msg.get_content()
+            except Exception:
+                body = str(msg.get_payload() or "")
+        if "html" in (msg.get_content_type() or "").lower():
+            body_type = "text/html"
+
+    conn = get_db_conn()
+    conn.execute(
+        "INSERT INTO received_emails (recipient, sender, subject, body, body_type) VALUES (?, ?, ?, ?, ?)",
+        (final_recipient, final_sender, subject, body, body_type),
+    )
+    conn.commit()
+    conn.close()
+    run_cleanup_if_needed()
