@@ -19,17 +19,27 @@ from app.utils.time_utils import parse_request_timestamp, row_timestamp_to_utc
 
 
 def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
-    context = build_mail_query_context(is_admin_view, recipient_override)
+    from app.services.smtp_service import get_smtp_config
 
-    if mark_as_read:
-        conn = get_db_conn()
-        try:
-            ids_to_mark = [str(e["id"]) for e in context["emails_data"] if not e["is_read"]]
-            if ids_to_mark:
-                conn.execute(f"UPDATE received_emails SET is_read=1 WHERE id IN ({','.join(ids_to_mark)})")
-                conn.commit()
-        finally:
-            conn.close()
+    context = build_mail_query_context(is_admin_view, recipient_override)
+    draft_count = 0
+    sent_count = 0
+
+    conn = get_db_conn()
+    try:
+        if not recipient_override:
+            current_user = (session.get("user_email") or "").strip()
+            default_sender = (get_smtp_config().get("default_sender") or "").strip()
+            draft_count = conn.execute(
+                "SELECT COUNT(*) FROM draft_emails WHERE lower(trim(owner_email)) = lower(trim(?))",
+                (current_user,),
+            ).fetchone()[0]
+            sent_count = conn.execute(
+                "SELECT COUNT(*) FROM sent_emails WHERE lower(trim(owner_email)) = lower(trim(?)) OR (? != '' AND lower(trim(sender)) = lower(trim(?)))",
+                (current_user, default_sender, default_sender),
+            ).fetchone()[0]
+    finally:
+        conn.close()
 
     selected_email = None
     selected_prev_url = None
@@ -78,6 +88,9 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None):
         per_page=context["per_page"],
         selected_prev_url=selected_prev_url,
         selected_next_url=selected_next_url,
+        draft_items=[{"id": idx} for idx in range(draft_count)],
+        sent_items=[],
+        sent_count=sent_count,
     )
 
 

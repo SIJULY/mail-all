@@ -1,7 +1,10 @@
 """SMTP 配置与发信服务模块。"""
 
+import os
 import smtplib
+from email import encoders
 from email.header import Header
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Dict
@@ -40,7 +43,7 @@ def is_smtp_configured() -> bool:
 
 
 
-def send_email_via_smtp_config(to_address, subject, text_body, html_body, cfg):
+def send_email_via_smtp_config(to_address, subject, text_body, html_body, cfg, attachments=None):
     if not cfg["password"] or not cfg["default_sender"]:
         return False, "发件功能未配置(缺少SMTP密码/API密钥或默认发件人地址)。"
 
@@ -49,15 +52,30 @@ def send_email_via_smtp_config(to_address, subject, text_body, html_body, cfg):
     html_body = html_body or ""
 
     try:
-        if html_body.strip():
-            msg = MIMEMultipart("alternative")
+        attachments = attachments or []
+        has_attachments = bool(attachments)
+        if html_body.strip() or has_attachments:
+            if html_body.strip():
+                msg = MIMEMultipart("mixed")
+                alternative_part = MIMEMultipart("alternative")
+                plain_fallback = text_body.strip() or strip_tags_for_preview(html_body) or "(HTML Mail)"
+                alternative_part.attach(MIMEText(plain_fallback, "plain", "utf-8"))
+                alternative_part.attach(MIMEText(html_body, "html", "utf-8"))
+                msg.attach(alternative_part)
+            else:
+                msg = MIMEMultipart("mixed")
+                msg.attach(MIMEText(text_body, "plain", "utf-8"))
             msg["Subject"] = Header(subject, "utf-8")
             msg["From"] = cfg["default_sender"]
             msg["To"] = to_address
-
-            plain_fallback = text_body.strip() or strip_tags_for_preview(html_body) or "(HTML Mail)"
-            msg.attach(MIMEText(plain_fallback, "plain", "utf-8"))
-            msg.attach(MIMEText(html_body, "html", "utf-8"))
+            for attachment in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(attachment["content"])
+                encoders.encode_base64(part)
+                filename = attachment.get("filename") or "attachment"
+                part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", filename))
+                part.add_header("Content-Type", attachment.get("content_type") or "application/octet-stream", name=("utf-8", "", filename))
+                msg.attach(part)
         else:
             msg = MIMEText(text_body, "plain", "utf-8")
             msg["Subject"] = Header(subject, "utf-8")
@@ -77,6 +95,25 @@ def send_email_via_smtp_config(to_address, subject, text_body, html_body, cfg):
 
 
 
-def send_email_via_smtp(to_address, subject, body, html_body=""):
+def build_attachments_from_files(files):
+    attachments = []
+    for file_storage in files or []:
+        if not file_storage:
+            continue
+        filename = (file_storage.filename or "").strip()
+        if not filename:
+            continue
+        attachments.append(
+            {
+                "filename": os.path.basename(filename),
+                "content_type": (file_storage.content_type or "application/octet-stream").strip() or "application/octet-stream",
+                "content": file_storage.read(),
+            }
+        )
+    return attachments
+
+
+
+def send_email_via_smtp(to_address, subject, body, html_body="", attachments=None):
     cfg = get_smtp_config()
-    return send_email_via_smtp_config(to_address, subject, body, html_body, cfg)
+    return send_email_via_smtp_config(to_address, subject, body, html_body, cfg, attachments=attachments)
