@@ -93,6 +93,7 @@ def render_email_list_page(
         code = extract_code_from_body((item["subject"] or "") + "\n" + body_for_preview)
         open_args = dict(base_args)
         open_args["selected_id"] = item["id"]
+        sender_name, sender_email = parseaddr(item["sender"] or "")
         processed_emails.append(
             {
                 "id": item["id"],
@@ -103,7 +104,7 @@ def render_email_list_page(
                 "preview_short": (code if code else body_for_preview)[:160],
                 "is_code": bool(code),
                 "recipient": item["recipient"] or "",
-                "sender": parseaddr(item["sender"] or "")[1],
+                "sender": sender_name or sender_email or (item["sender"] or ""),
                 "open_url": url_for(endpoint, **open_args),
             }
         )

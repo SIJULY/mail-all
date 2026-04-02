@@ -15,6 +15,23 @@ REPO_RAW_BASE="https://raw.githubusercontent.com/SIJULY/mail-all/main"
 SERVICE_WEB="mail-api-web.service"
 SERVICE_SMTP="mail-api-smtp.service"
 ENV_FILE="${PROJECT_DIR}/mail_api.env"
+EXISTING_DB_FILE_BASENAME="emails.db"
+EXISTING_LAST_CLEANUP_BASENAME="last_cleanup.txt"
+EXISTING_WEB_PORT="2099"
+EXISTING_SMTP_LISTEN_PORT="25"
+EXISTING_ADMIN_USERNAME="admin"
+EXISTING_SYSTEM_TITLE="Mail API Service"
+EXISTING_SERVER_PUBLIC_IP=""
+EXISTING_SMTP_SERVER="smtp.sendgrid.net"
+EXISTING_SMTP_PORT="587"
+EXISTING_SMTP_USERNAME="apikey"
+EXISTING_SMTP_PASSWORD=""
+EXISTING_DEFAULT_SENDER=""
+EXISTING_SPECIAL_VIEW_TOKEN="2088"
+EXISTING_MOEMAIL_API_KEY="2088"
+EXISTING_MOEMAIL_DEFAULT_EXPIRY="3600000"
+EXISTING_MOEMAIL_DEFAULT_ROLE="user"
+INSTALL_MODE="reinstall"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -79,15 +96,49 @@ get_public_ip() {
   echo "${ip}"
 }
 
+load_existing_install_defaults() {
+  if [ -f "${ENV_FILE}" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "${ENV_FILE}"
+    set +a
+
+    EXISTING_WEB_PORT="${PORT:-2099}"
+    EXISTING_SMTP_LISTEN_PORT="${MAIL_SMTP_LISTEN_PORT:-25}"
+    EXISTING_ADMIN_USERNAME="${MAIL_ADMIN_USERNAME:-admin}"
+    EXISTING_SYSTEM_TITLE="${MAIL_SYSTEM_TITLE:-Mail API Service}"
+    EXISTING_SERVER_PUBLIC_IP="${MAIL_SERVER_PUBLIC_IP:-}"
+    EXISTING_SMTP_SERVER="${MAIL_SMTP_SERVER:-smtp.sendgrid.net}"
+    EXISTING_SMTP_PORT="${MAIL_SMTP_PORT:-587}"
+    EXISTING_SMTP_USERNAME="${MAIL_SMTP_USERNAME:-apikey}"
+    EXISTING_SMTP_PASSWORD="${MAIL_SMTP_PASSWORD:-}"
+    EXISTING_DEFAULT_SENDER="${MAIL_DEFAULT_SENDER:-}"
+    EXISTING_SPECIAL_VIEW_TOKEN="${MAIL_SPECIAL_VIEW_TOKEN:-2088}"
+    EXISTING_MOEMAIL_API_KEY="${MAIL_MOEMAIL_API_KEY:-${EXISTING_SPECIAL_VIEW_TOKEN}}"
+    EXISTING_MOEMAIL_DEFAULT_EXPIRY="${MAIL_MOEMAIL_DEFAULT_EXPIRY:-3600000}"
+    EXISTING_MOEMAIL_DEFAULT_ROLE="${MAIL_MOEMAIL_DEFAULT_ROLE:-user}"
+    EXISTING_DB_FILE_BASENAME=$(basename "${MAIL_DB_FILE:-emails.db}")
+    EXISTING_LAST_CLEANUP_BASENAME=$(basename "${MAIL_LAST_CLEANUP_FILE:-last_cleanup.txt}")
+  fi
+}
+
+require_existing_install() {
+  if [ ! -f "${ENV_FILE}" ]; then
+    err "未检测到已有安装配置：${ENV_FILE}"
+    err "如果这是首次安装，请选择“重装 / 初始化”。"
+    exit 1
+  fi
+}
+
 backup_existing_install() {
   if [ -d "${PROJECT_DIR}" ]; then
     warn "检测到已存在安装目录：${PROJECT_DIR}"
     local backup_dir="/opt/mail_api_backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "${backup_dir}"
 
-    if [ -f "${PROJECT_DIR}/emails.db" ]; then
-      cp -f "${PROJECT_DIR}/emails.db" "${backup_dir}/emails.db"
-      ok "已备份数据库到 ${backup_dir}/emails.db"
+    if [ -f "${PROJECT_DIR}/${EXISTING_DB_FILE_BASENAME}" ]; then
+      cp -f "${PROJECT_DIR}/${EXISTING_DB_FILE_BASENAME}" "${backup_dir}/${EXISTING_DB_FILE_BASENAME}"
+      ok "已备份数据库到 ${backup_dir}/${EXISTING_DB_FILE_BASENAME}"
     fi
     if [ -f "${PROJECT_DIR}/app.py" ]; then
       cp -f "${PROJECT_DIR}/app.py" "${backup_dir}/app.py"
@@ -101,8 +152,8 @@ backup_existing_install() {
     if [ -f "${PROJECT_DIR}/README.md" ]; then
       cp -f "${PROJECT_DIR}/README.md" "${backup_dir}/README.md"
     fi
-    if [ -f "${PROJECT_DIR}/last_cleanup.txt" ]; then
-      cp -f "${PROJECT_DIR}/last_cleanup.txt" "${backup_dir}/last_cleanup.txt"
+    if [ -f "${PROJECT_DIR}/${EXISTING_LAST_CLEANUP_BASENAME}" ]; then
+      cp -f "${PROJECT_DIR}/${EXISTING_LAST_CLEANUP_BASENAME}" "${backup_dir}/${EXISTING_LAST_CLEANUP_BASENAME}"
     fi
     if [ -f "${ENV_FILE}" ]; then
       cp -f "${ENV_FILE}" "${backup_dir}/mail_api.env"
@@ -279,6 +330,7 @@ MAIL_SMTP_PORT=${esc_smtp_port}
 MAIL_SMTP_USERNAME=${esc_smtp_username}
 MAIL_SMTP_PASSWORD=${esc_smtp_password}
 MAIL_DEFAULT_SENDER=${esc_default_sender}
+MAIL_SMTP_LISTEN_PORT="${SMTP_LISTEN_PORT_VALUE}"
 MAIL_SPECIAL_VIEW_TOKEN=${esc_special_view_token}
 MAIL_MOEMAIL_API_KEY=${esc_moemail_api_key}
 MAIL_MOEMAIL_DEFAULT_EXPIRY=${esc_moemail_default_expiry}
@@ -399,9 +451,9 @@ uninstall_server() {
   local backup_dir="/root/mail_api_uninstall_backup_$(date +%Y%m%d_%H%M%S)"
   mkdir -p "${backup_dir}"
 
-  if [ -f "${PROJECT_DIR}/emails.db" ]; then
-    cp -f "${PROJECT_DIR}/emails.db" "${backup_dir}/emails.db"
-    ok "数据库已备份到 ${backup_dir}/emails.db"
+  if [ -f "${PROJECT_DIR}/${EXISTING_DB_FILE_BASENAME}" ]; then
+    cp -f "${PROJECT_DIR}/${EXISTING_DB_FILE_BASENAME}" "${backup_dir}/${EXISTING_DB_FILE_BASENAME}"
+    ok "数据库已备份到 ${backup_dir}/${EXISTING_DB_FILE_BASENAME}"
   fi
 
   if [ -f "${ENV_FILE}" ]; then
@@ -426,27 +478,29 @@ main_menu() {
   echo "========================================"
   echo " 小龙女她爸邮局服务系统 - 拆分版安装脚本"
   echo "========================================"
-  echo "1) 安装 / 重装"
-  echo "2) 卸载"
+  echo "1) 更新代码（保留现有配置和数据库）"
+  echo "2) 重装 / 初始化（可修改配置，默认保留数据库）"
+  echo "3) 卸载"
   echo "========================================"
-  read -rp "请选择 [1-2]: " action
+  read -rp "请选择 [1-3]: " action
 
   case "${action}" in
-    1) ;;
-    2) uninstall_server ;;
+    1) INSTALL_MODE="update" ;;
+    2) INSTALL_MODE="reinstall" ;;
+    3) uninstall_server ;;
     *) err "无效选择"; exit 1 ;;
   esac
 }
 
 collect_inputs() {
-  read -rp "请输入 Web 端口 [默认 2099]: " WEB_PORT
-  WEB_PORT="${WEB_PORT:-2099}"
+  read -rp "请输入 Web 端口 [默认 ${EXISTING_WEB_PORT}]: " WEB_PORT
+  WEB_PORT="${WEB_PORT:-${EXISTING_WEB_PORT}}"
 
-  read -rp "请输入 SMTP 监听端口 [默认 25]: " SMTP_LISTEN_PORT_VALUE
-  SMTP_LISTEN_PORT_VALUE="${SMTP_LISTEN_PORT_VALUE:-25}"
+  read -rp "请输入 SMTP 监听端口 [默认 ${EXISTING_SMTP_LISTEN_PORT}]: " SMTP_LISTEN_PORT_VALUE
+  SMTP_LISTEN_PORT_VALUE="${SMTP_LISTEN_PORT_VALUE:-${EXISTING_SMTP_LISTEN_PORT}}"
 
-  read -rp "请输入管理员用户名 [默认 admin]: " ADMIN_USERNAME_VALUE
-  ADMIN_USERNAME_VALUE="${ADMIN_USERNAME_VALUE:-admin}"
+  read -rp "请输入管理员用户名 [默认 ${EXISTING_ADMIN_USERNAME}]: " ADMIN_USERNAME_VALUE
+  ADMIN_USERNAME_VALUE="${ADMIN_USERNAME_VALUE:-${EXISTING_ADMIN_USERNAME}}"
 
   while true; do
     read -rsp "请输入管理员密码: " ADMIN_PASSWORD_PLAIN
@@ -467,54 +521,57 @@ collect_inputs() {
     break
   done
 
-  read -rp "请输入系统标题 [默认 Mail API Service]: " SYSTEM_TITLE_VALUE
-  SYSTEM_TITLE_VALUE="${SYSTEM_TITLE_VALUE:-Mail API Service}"
+  read -rp "请输入系统标题 [默认 ${EXISTING_SYSTEM_TITLE}]: " SYSTEM_TITLE_VALUE
+  SYSTEM_TITLE_VALUE="${SYSTEM_TITLE_VALUE:-${EXISTING_SYSTEM_TITLE}}"
 
-  SERVER_PUBLIC_IP_VALUE="$(get_public_ip)"
+  SERVER_PUBLIC_IP_VALUE="${EXISTING_SERVER_PUBLIC_IP}"
+  if [ -z "${SERVER_PUBLIC_IP_VALUE}" ]; then
+    SERVER_PUBLIC_IP_VALUE="$(get_public_ip)"
+  fi
   read -rp "请输入服务器公网 IP [默认 ${SERVER_PUBLIC_IP_VALUE}]: " SERVER_PUBLIC_IP_INPUT
   SERVER_PUBLIC_IP_VALUE="${SERVER_PUBLIC_IP_INPUT:-${SERVER_PUBLIC_IP_VALUE}}"
 
-  read -rp "请输入 SMTP 服务器 [默认 smtp.sendgrid.net]: " SMTP_SERVER_VALUE
-  SMTP_SERVER_VALUE="${SMTP_SERVER_VALUE:-smtp.sendgrid.net}"
+  read -rp "请输入 SMTP 服务器 [默认 ${EXISTING_SMTP_SERVER}]: " SMTP_SERVER_VALUE
+  SMTP_SERVER_VALUE="${SMTP_SERVER_VALUE:-${EXISTING_SMTP_SERVER}}"
 
-  read -rp "请输入 SMTP 认证端口 [默认 587]: " SMTP_PORT_VALUE
-  SMTP_PORT_VALUE="${SMTP_PORT_VALUE:-587}"
+  read -rp "请输入 SMTP 认证端口 [默认 ${EXISTING_SMTP_PORT}]: " SMTP_PORT_VALUE
+  SMTP_PORT_VALUE="${SMTP_PORT_VALUE:-${EXISTING_SMTP_PORT}}"
 
-  read -rp "请输入 SMTP 用户名 [默认 apikey]: " SMTP_USERNAME_VALUE
-  SMTP_USERNAME_VALUE="${SMTP_USERNAME_VALUE:-apikey}"
+  read -rp "请输入 SMTP 用户名 [默认 ${EXISTING_SMTP_USERNAME}]: " SMTP_USERNAME_VALUE
+  SMTP_USERNAME_VALUE="${SMTP_USERNAME_VALUE:-${EXISTING_SMTP_USERNAME}}"
 
-  read -rp "请输入 SendGrid API Key / SMTP 密码（留空则不配置发信功能）: " SMTP_PASSWORD_VALUE
-  SMTP_PASSWORD_VALUE="${SMTP_PASSWORD_VALUE:-}"
+  read -rp "请输入 SendGrid API Key / SMTP 密码（留空则沿用旧值）: " SMTP_PASSWORD_VALUE
+  SMTP_PASSWORD_VALUE="${SMTP_PASSWORD_VALUE:-${EXISTING_SMTP_PASSWORD}}"
 
-  read -rp "请输入默认发件邮箱（留空则不配置发信功能）: " DEFAULT_SENDER_VALUE
-  DEFAULT_SENDER_VALUE="${DEFAULT_SENDER_VALUE:-}"
+  read -rp "请输入默认发件邮箱（留空则沿用旧值）: " DEFAULT_SENDER_VALUE
+  DEFAULT_SENDER_VALUE="${DEFAULT_SENDER_VALUE:-${EXISTING_DEFAULT_SENDER}}"
 
-  read -rp "请输入 MoeMail 默认过期时间(毫秒) [默认 3600000]: " MOEMAIL_DEFAULT_EXPIRY_VALUE
-  MOEMAIL_DEFAULT_EXPIRY_VALUE="${MOEMAIL_DEFAULT_EXPIRY_VALUE:-3600000}"
+  read -rp "请输入 MoeMail 默认过期时间(毫秒) [默认 ${EXISTING_MOEMAIL_DEFAULT_EXPIRY}]: " MOEMAIL_DEFAULT_EXPIRY_VALUE
+  MOEMAIL_DEFAULT_EXPIRY_VALUE="${MOEMAIL_DEFAULT_EXPIRY_VALUE:-${EXISTING_MOEMAIL_DEFAULT_EXPIRY}}"
 
-  read -rp "请输入 MoeMail 默认角色 [默认 user]: " MOEMAIL_DEFAULT_ROLE_VALUE
-  MOEMAIL_DEFAULT_ROLE_VALUE="${MOEMAIL_DEFAULT_ROLE_VALUE:-user}"
+  read -rp "请输入 MoeMail 默认角色 [默认 ${EXISTING_MOEMAIL_DEFAULT_ROLE}]: " MOEMAIL_DEFAULT_ROLE_VALUE
+  MOEMAIL_DEFAULT_ROLE_VALUE="${MOEMAIL_DEFAULT_ROLE_VALUE:-${EXISTING_MOEMAIL_DEFAULT_ROLE}}"
 
-  read -rp "请输入数据库文件名 [默认 emails.db]: " DB_FILE_VALUE
-  DB_FILE_VALUE="${DB_FILE_VALUE:-emails.db}"
+  read -rp "请输入数据库文件名 [默认 ${EXISTING_DB_FILE_BASENAME}]: " DB_FILE_VALUE
+  DB_FILE_VALUE="${DB_FILE_VALUE:-${EXISTING_DB_FILE_BASENAME}}"
 
-  read -rp "请输入清理记录文件名 [默认 last_cleanup.txt]: " LAST_CLEANUP_FILE_VALUE
-  LAST_CLEANUP_FILE_VALUE="${LAST_CLEANUP_FILE_VALUE:-last_cleanup.txt}"
+  read -rp "请输入清理记录文件名 [默认 ${EXISTING_LAST_CLEANUP_BASENAME}]: " LAST_CLEANUP_FILE_VALUE
+  LAST_CLEANUP_FILE_VALUE="${LAST_CLEANUP_FILE_VALUE:-${EXISTING_LAST_CLEANUP_BASENAME}}"
 
   read -rp "是否自定义 SPECIAL_VIEW_TOKEN？[y/N]: " CUSTOM_SPECIAL_TOKEN
   if [[ "${CUSTOM_SPECIAL_TOKEN:-N}" =~ ^[Yy]$ ]]; then
-    read -rp "请输入 SPECIAL_VIEW_TOKEN [默认 2088]: " SPECIAL_VIEW_TOKEN_VALUE
-    SPECIAL_VIEW_TOKEN_VALUE="${SPECIAL_VIEW_TOKEN_VALUE:-2088}"
+    read -rp "请输入 SPECIAL_VIEW_TOKEN [默认 ${EXISTING_SPECIAL_VIEW_TOKEN}]: " SPECIAL_VIEW_TOKEN_VALUE
+    SPECIAL_VIEW_TOKEN_VALUE="${SPECIAL_VIEW_TOKEN_VALUE:-${EXISTING_SPECIAL_VIEW_TOKEN}}"
   else
-    SPECIAL_VIEW_TOKEN_VALUE="2088"
+    SPECIAL_VIEW_TOKEN_VALUE="${EXISTING_SPECIAL_VIEW_TOKEN}"
   fi
 
   read -rp "是否自定义 MOEMAIL_API_KEY？[y/N]: " CUSTOM_MOEMAIL_KEY
   if [[ "${CUSTOM_MOEMAIL_KEY:-N}" =~ ^[Yy]$ ]]; then
-    read -rp "请输入 MOEMAIL_API_KEY [默认 2088]: " MOEMAIL_API_KEY_VALUE
-    MOEMAIL_API_KEY_VALUE="${MOEMAIL_API_KEY_VALUE:-${SPECIAL_VIEW_TOKEN_VALUE}}"
+    read -rp "请输入 MOEMAIL_API_KEY [默认 ${EXISTING_MOEMAIL_API_KEY}]: " MOEMAIL_API_KEY_VALUE
+    MOEMAIL_API_KEY_VALUE="${MOEMAIL_API_KEY_VALUE:-${EXISTING_MOEMAIL_API_KEY}}"
   else
-    MOEMAIL_API_KEY_VALUE="${SPECIAL_VIEW_TOKEN_VALUE}"
+    MOEMAIL_API_KEY_VALUE="${EXISTING_MOEMAIL_API_KEY}"
   fi
 
   SECRET_KEY_VALUE="$(generate_secret_key)"
@@ -530,15 +587,52 @@ install_flow() {
   show_summary
 }
 
+update_flow() {
+  require_existing_install
+  backup_existing_install
+  cleanup_legacy_mail_services
+  create_project_dir
+  install_system_packages
+  setup_venv
+  prepare_app_source
+  write_requirements_if_missing
+  install_python_packages
+  write_smtp_runner
+  write_systemd_services
+  reload_and_start_services
+  configure_firewall
+  echo
+  ok "代码更新完成（已保留原有配置和数据库）"
+  echo "环境配置文件: ${ENV_FILE}"
+  echo "数据库位置: ${PROJECT_DIR}/${EXISTING_DB_FILE_BASENAME}"
+}
+
+reinstall_flow() {
+  backup_existing_install
+  cleanup_legacy_mail_services
+  create_project_dir
+  install_system_packages
+  setup_venv
+  prepare_app_source
+  write_requirements_if_missing
+  install_python_packages
+  collect_inputs
+  install_flow
+}
+
 require_root
+load_existing_install_defaults
 main_menu
-backup_existing_install
-cleanup_legacy_mail_services
-create_project_dir
-install_system_packages
-setup_venv
-prepare_app_source
-write_requirements_if_missing
-install_python_packages
-collect_inputs
-install_flow
+
+case "${INSTALL_MODE}" in
+  update)
+    update_flow
+    ;;
+  reinstall)
+    reinstall_flow
+    ;;
+  *)
+    err "未知安装模式: ${INSTALL_MODE}"
+    exit 1
+    ;;
+esac
