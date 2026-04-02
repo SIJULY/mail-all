@@ -250,11 +250,16 @@ prepare_app_source() {
     "app/repositories/__init__.py" "app/repositories/auth_repo.py" "app/repositories/db.py" "app/repositories/mail_repo.py" "app/repositories/settings_repo.py" \
     "app/routes/__init__.py" "app/routes/admin_routes.py" "app/routes/api_routes.py" "app/routes/mail_routes.py" "app/routes/moemail_routes.py" "app/routes/ui_routes.py" \
     "app/services/__init__.py" "app/services/auth_service.py" "app/services/cleanup_service.py" "app/services/inbound_service.py" "app/services/message_service.py" "app/services/settings_service.py" "app/services/smtp_service.py" "app/services/view_service.py" \
-    "app/ui/__init__.py" "app/ui/html_pages.py" "app/ui/page_builders.py" \
+    "app/ui/__init__.py" "app/ui/html_pages.py" "app/ui/page_builders.py" "app/ui/sender_display.py" \
     "app/utils/__init__.py" "app/utils/decorators.py" "app/utils/mail_utils.py" "app/utils/response.py" "app/utils/text_utils.py" "app/utils/time_utils.py"; do
     mkdir -p "${PROJECT_DIR}/$(dirname "$rel")"
     curl -fsSL "${REPO_RAW_BASE}/$rel" -o "${PROJECT_DIR}/$rel"
   done
+
+  if [ ! -f "${PROJECT_DIR}/app/ui/sender_display.py" ]; then
+    err "GitHub 下载不完整：缺少 app/ui/sender_display.py"
+    exit 1
+  fi
 
   ok "已从 GitHub 下载拆分版项目到 ${PROJECT_DIR}"
 }
