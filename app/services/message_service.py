@@ -109,14 +109,18 @@ def process_email_data(to_address, raw_email_data):
             final_sender = match.group(1)
 
     if not final_sender:
-        reply_to_header = msg.get("Reply-To", "")
-        from_header = msg.get("From", "")
-        _, reply_to_addr = parseaddr(str(reply_to_header))
-        _, from_addr = parseaddr(str(from_header))
-        if reply_to_addr and "@" in reply_to_addr:
-            final_sender = reply_to_addr
+        from_header = decode_mime_header_value(str(msg.get("From", ""))).strip()
+        reply_to_header = decode_mime_header_value(str(msg.get("Reply-To", ""))).strip()
+        _, from_addr = parseaddr(from_header)
+        _, reply_to_addr = parseaddr(reply_to_header)
+        if from_header and from_addr and "@" in from_addr:
+            final_sender = from_header
+        elif reply_to_header and reply_to_addr and "@" in reply_to_addr:
+            final_sender = reply_to_header
         elif from_addr and "@" in from_addr:
             final_sender = from_addr
+        elif reply_to_addr and "@" in reply_to_addr:
+            final_sender = reply_to_addr
 
     if not final_sender:
         final_sender = "unknown@sender.com"

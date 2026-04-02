@@ -98,27 +98,48 @@ get_public_ip() {
 
 load_existing_install_defaults() {
   if [ -f "${ENV_FILE}" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "${ENV_FILE}"
-    set +a
+    local parsed
+    parsed=$(python3 - <<'PY'
+from pathlib import Path
+import os
 
-    EXISTING_WEB_PORT="${PORT:-2099}"
-    EXISTING_SMTP_LISTEN_PORT="${MAIL_SMTP_LISTEN_PORT:-25}"
-    EXISTING_ADMIN_USERNAME="${MAIL_ADMIN_USERNAME:-admin}"
-    EXISTING_SYSTEM_TITLE="${MAIL_SYSTEM_TITLE:-Mail API Service}"
-    EXISTING_SERVER_PUBLIC_IP="${MAIL_SERVER_PUBLIC_IP:-}"
-    EXISTING_SMTP_SERVER="${MAIL_SMTP_SERVER:-smtp.sendgrid.net}"
-    EXISTING_SMTP_PORT="${MAIL_SMTP_PORT:-587}"
-    EXISTING_SMTP_USERNAME="${MAIL_SMTP_USERNAME:-apikey}"
-    EXISTING_SMTP_PASSWORD="${MAIL_SMTP_PASSWORD:-}"
-    EXISTING_DEFAULT_SENDER="${MAIL_DEFAULT_SENDER:-}"
-    EXISTING_SPECIAL_VIEW_TOKEN="${MAIL_SPECIAL_VIEW_TOKEN:-2088}"
-    EXISTING_MOEMAIL_API_KEY="${MAIL_MOEMAIL_API_KEY:-${EXISTING_SPECIAL_VIEW_TOKEN}}"
-    EXISTING_MOEMAIL_DEFAULT_EXPIRY="${MAIL_MOEMAIL_DEFAULT_EXPIRY:-3600000}"
-    EXISTING_MOEMAIL_DEFAULT_ROLE="${MAIL_MOEMAIL_DEFAULT_ROLE:-user}"
-    EXISTING_DB_FILE_BASENAME=$(basename "${MAIL_DB_FILE:-emails.db}")
-    EXISTING_LAST_CLEANUP_BASENAME=$(basename "${MAIL_LAST_CLEANUP_FILE:-last_cleanup.txt}")
+path = Path('/opt/mail_api/mail_api.env')
+values = {}
+for raw_line in path.read_text(encoding='utf-8').splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    key, value = line.split('=', 1)
+    key = key.strip()
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1]
+    values[key] = value
+
+pairs = {
+    'EXISTING_WEB_PORT': values.get('PORT', '2099'),
+    'EXISTING_SMTP_LISTEN_PORT': values.get('MAIL_SMTP_LISTEN_PORT', '25'),
+    'EXISTING_ADMIN_USERNAME': values.get('MAIL_ADMIN_USERNAME', 'admin'),
+    'EXISTING_SYSTEM_TITLE': values.get('MAIL_SYSTEM_TITLE', 'Mail API Service'),
+    'EXISTING_SERVER_PUBLIC_IP': values.get('MAIL_SERVER_PUBLIC_IP', ''),
+    'EXISTING_SMTP_SERVER': values.get('MAIL_SMTP_SERVER', 'smtp.sendgrid.net'),
+    'EXISTING_SMTP_PORT': values.get('MAIL_SMTP_PORT', '587'),
+    'EXISTING_SMTP_USERNAME': values.get('MAIL_SMTP_USERNAME', 'apikey'),
+    'EXISTING_SMTP_PASSWORD': values.get('MAIL_SMTP_PASSWORD', ''),
+    'EXISTING_DEFAULT_SENDER': values.get('MAIL_DEFAULT_SENDER', ''),
+    'EXISTING_SPECIAL_VIEW_TOKEN': values.get('MAIL_SPECIAL_VIEW_TOKEN', '2088'),
+    'EXISTING_MOEMAIL_API_KEY': values.get('MAIL_MOEMAIL_API_KEY', values.get('MAIL_SPECIAL_VIEW_TOKEN', '2088')),
+    'EXISTING_MOEMAIL_DEFAULT_EXPIRY': values.get('MAIL_MOEMAIL_DEFAULT_EXPIRY', '3600000'),
+    'EXISTING_MOEMAIL_DEFAULT_ROLE': values.get('MAIL_MOEMAIL_DEFAULT_ROLE', 'user'),
+    'EXISTING_DB_FILE_BASENAME': os.path.basename(values.get('MAIL_DB_FILE', 'emails.db')) or 'emails.db',
+    'EXISTING_LAST_CLEANUP_BASENAME': os.path.basename(values.get('MAIL_LAST_CLEANUP_FILE', 'last_cleanup.txt')) or 'last_cleanup.txt',
+}
+for key, value in pairs.items():
+    value = str(value).replace('\\', '\\\\').replace('"', '\\"')
+    print(f'{key}="{value}"')
+PY
+)
+    eval "${parsed}"
   fi
 }
 
@@ -243,6 +264,14 @@ setup_venv() {
   python3 -m venv "${VENV_DIR}"
   "${VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel
   ok "虚拟环境已创建。"
+}
+
+ensure_venv() {
+  if [ -x "${VENV_DIR}/bin/python" ] && [ -x "${VENV_DIR}/bin/pip" ]; then
+    ok "检测到已有 Python 虚拟环境，继续复用。"
+    return
+  fi
+  setup_venv
 }
 
 write_requirements_if_missing() {
@@ -589,13 +618,29 @@ install_flow() {
 
 update_flow() {
   require_existing_install
+  WEB_PORT="${EXISTING_WEB_PORT}"
+  SMTP_LISTEN_PORT_VALUE="${EXISTING_SMTP_LISTEN_PORT}"
+  ADMIN_USERNAME_VALUE="${EXISTING_ADMIN_USERNAME}"
+  SYSTEM_TITLE_VALUE="${EXISTING_SYSTEM_TITLE}"
+  SERVER_PUBLIC_IP_VALUE="${EXISTING_SERVER_PUBLIC_IP}"
+  SMTP_SERVER_VALUE="${EXISTING_SMTP_SERVER}"
+  SMTP_PORT_VALUE="${EXISTING_SMTP_PORT}"
+  SMTP_USERNAME_VALUE="${EXISTING_SMTP_USERNAME}"
+  SMTP_PASSWORD_VALUE="${EXISTING_SMTP_PASSWORD}"
+  DEFAULT_SENDER_VALUE="${EXISTING_DEFAULT_SENDER}"
+  SPECIAL_VIEW_TOKEN_VALUE="${EXISTING_SPECIAL_VIEW_TOKEN}"
+  MOEMAIL_API_KEY_VALUE="${EXISTING_MOEMAIL_API_KEY}"
+  MOEMAIL_DEFAULT_EXPIRY_VALUE="${EXISTING_MOEMAIL_DEFAULT_EXPIRY}"
+  MOEMAIL_DEFAULT_ROLE_VALUE="${EXISTING_MOEMAIL_DEFAULT_ROLE}"
+  DB_FILE_VALUE="${EXISTING_DB_FILE_BASENAME}"
+  LAST_CLEANUP_FILE_VALUE="${EXISTING_LAST_CLEANUP_BASENAME}"
+
   backup_existing_install
   cleanup_legacy_mail_services
   create_project_dir
-  install_system_packages
-  setup_venv
   prepare_app_source
   write_requirements_if_missing
+  ensure_venv
   install_python_packages
   write_smtp_runner
   write_systemd_services
