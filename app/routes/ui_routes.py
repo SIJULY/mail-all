@@ -99,6 +99,7 @@ def register_ui_routes(app):
                     "timestamp": row["updated_at"],
                     "status": "草稿",
                     "edit_url": url_for("compose_email", draft_id=row["id"]),
+                    "delete_url": url_for("delete_draft_email", draft_id=row["id"]),
                 }
             )
 
@@ -144,6 +145,7 @@ def register_ui_routes(app):
                 "timestamp": row["timestamp"],
                 "status": "已发送",
                 "open_url": url_for("view_sent", sent_id=row["id"]),
+                "delete_url": url_for("delete_sent_email", sent_id=row["id"]),
             }
             sent_items.append(item)
             if sent_id == row["id"]:
@@ -182,6 +184,44 @@ def register_ui_routes(app):
             inbox_count=inbox_context["inbox_count"],
             trash_count=inbox_context["trash_count"],
         )
+
+    @app.route("/delete_draft/<int:draft_id>", methods=["POST"])
+    @login_required
+    def delete_draft_email(draft_id):
+        from flask import flash
+        from app.repositories.db import get_db_conn
+
+        conn = get_db_conn()
+        try:
+            result = conn.execute(
+                "DELETE FROM draft_emails WHERE id = ? AND owner_email = ?",
+                (draft_id, session["user_email"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        flash("草稿已删除" if result.rowcount else "草稿不存在或无权删除", "success" if result.rowcount else "error")
+        return redirect(url_for("view_drafts"))
+
+    @app.route("/delete_sent/<int:sent_id>", methods=["POST"])
+    @login_required
+    def delete_sent_email(sent_id):
+        from flask import flash
+        from app.repositories.db import get_db_conn
+
+        current_user = (session.get("user_email") or "").strip()
+        default_sender = (get_smtp_config().get("default_sender") or "").strip()
+        conn = get_db_conn()
+        try:
+            result = conn.execute(
+                "DELETE FROM sent_emails WHERE id = ? AND (lower(trim(owner_email)) = lower(trim(?)) OR (? != '' AND lower(trim(sender)) = lower(trim(?))))",
+                (sent_id, current_user, default_sender, default_sender),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        flash("已发送邮件已删除" if result.rowcount else "邮件不存在或无权删除", "success" if result.rowcount else "error")
+        return redirect(url_for("view_sent"))
 
     @app.route("/compose", methods=["GET", "POST"])
     @login_required
