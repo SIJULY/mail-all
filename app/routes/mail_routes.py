@@ -18,6 +18,34 @@ from app.utils.response import get_valid_per_page
 from app.utils.time_utils import parse_request_timestamp, row_timestamp_to_utc
 
 
+
+def normalize_requested_mail(value: str) -> str:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return ""
+    if " " in raw_value and "+" not in raw_value and "@" in raw_value:
+        local_part, domain = raw_value.split("@", 1)
+        raw_value = f"{local_part.replace(' ', '+')}@{domain}"
+    return raw_value
+
+
+
+def build_mail_search_variants(value: str):
+    normalized = normalize_requested_mail(value)
+    variants = []
+    for candidate in [value, normalized]:
+        candidate = (candidate or "").strip()
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+    return variants
+
+
+
+def should_keep_token_message() -> bool:
+    keep_value = (request.args.get("keep") or request.args.get("preserve") or "").strip().lower()
+    return keep_value in {"1", "true", "yes", "on"}
+
+
 def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, nav_mode="inbox"):
     from app.services.smtp_service import get_smtp_config
 
@@ -107,7 +135,7 @@ def register_mail_routes(app):
     @app.route("/Mail")
     def view_mail_by_token():
         token = request.args.get("token")
-        recipient_mail = request.args.get("mail")
+        recipient_mail = normalize_requested_mail(request.args.get("mail"))
         if not token or token != SPECIAL_VIEW_TOKEN:
             return jsonify({"error": "Invalid token"}), 401
         if not recipient_mail:
@@ -117,16 +145,32 @@ def register_mail_routes(app):
         new_keywords = ["chatgpt", "openai"]
         conn = get_db_conn()
         try:
+            mail_variants = build_mail_search_variants(recipient_mail)
+            where_parts = []
+            params = []
+            priority_parts = []
+            priority_params = []
+            for variant in mail_variants:
+                where_parts.append("lower(trim(recipient)) = lower(trim(?))")
+                params.append(variant)
+                priority_parts.append("lower(trim(recipient)) = lower(trim(?))")
+                priority_params.append(variant)
+            for variant in mail_variants:
+                recipient_like = f"%{variant}%"
+                where_parts.append("lower(ifnull(subject, '')) LIKE lower(?)")
+                where_parts.append("lower(ifnull(body, '')) LIKE lower(?)")
+                params.extend([recipient_like, recipient_like])
+            priority_sql = " OR ".join(priority_parts) if priority_parts else "0"
             messages = conn.execute(
-                """
+                f"""
                 SELECT id, subject, body, body_type
                 FROM received_emails
-                WHERE lower(trim(recipient)) = lower(trim(?))
-                  AND ifnull(is_deleted, 0) = 0
-                ORDER BY id DESC
+                WHERE ifnull(is_deleted, 0) = 0
+                  AND ({' OR '.join(where_parts)})
+                ORDER BY CASE WHEN {priority_sql} THEN 0 ELSE 1 END, id DESC
                 LIMIT 50
                 """,
-                (recipient_mail,),
+                params + priority_params,
             ).fetchall()
             for msg in messages:
                 subject = (msg["subject"] or "").lower().strip()
@@ -142,8 +186,9 @@ def register_mail_routes(app):
     @app.route("/MailCode")
     def view_mail_code_by_token():
         token = request.args.get("token")
-        recipient_mail = request.args.get("mail")
+        recipient_mail = normalize_requested_mail(request.args.get("mail"))
         after = request.args.get("after") or request.args.get("min_ts") or request.args.get("otp_sent_at")
+        keep_message = should_keep_token_message()
         if not token or token != SPECIAL_VIEW_TOKEN:
             return jsonify({"error": "Invalid token"}), 401
         if not recipient_mail:
@@ -152,16 +197,32 @@ def register_mail_routes(app):
         after_dt = parse_request_timestamp(after)
 
         def fetch_matching_messages(conn):
+            mail_variants = build_mail_search_variants(recipient_mail)
+            where_parts = []
+            params = []
+            priority_parts = []
+            priority_params = []
+            for variant in mail_variants:
+                where_parts.append("lower(trim(recipient)) = lower(trim(?))")
+                params.append(variant)
+                priority_parts.append("lower(trim(recipient)) = lower(trim(?))")
+                priority_params.append(variant)
+            for variant in mail_variants:
+                recipient_like = f"%{variant}%"
+                where_parts.append("lower(ifnull(subject, '')) LIKE lower(?)")
+                where_parts.append("lower(ifnull(body, '')) LIKE lower(?)")
+                params.extend([recipient_like, recipient_like])
+            priority_sql = " OR ".join(priority_parts) if priority_parts else "0"
             messages = conn.execute(
-                """
+                f"""
                 SELECT id, recipient, sender, subject, body, body_type, timestamp, is_read
                 FROM received_emails
-                WHERE lower(trim(recipient)) = lower(trim(?))
-                  AND ifnull(is_deleted, 0) = 0
-                ORDER BY id DESC
+                WHERE ifnull(is_deleted, 0) = 0
+                  AND ({' OR '.join(where_parts)})
+                ORDER BY CASE WHEN {priority_sql} THEN 0 ELSE 1 END, id DESC
                 LIMIT 100
                 """,
-                (recipient_mail,),
+                params + priority_params,
             ).fetchall()
             matched = []
             for msg in messages:
@@ -198,10 +259,13 @@ def register_mail_routes(app):
                 matched_messages = fetch_matching_messages(conn)
             for msg in matched_messages:
                 if not msg["is_read"]:
-                    conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
-                    conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
-                    conn.commit()
-                    app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                    if not keep_message:
+                        conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
+                        conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
+                        conn.commit()
+                        app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                    else:
+                        app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回验证码邮件但按 keep=1 保留 id={msg['id']} code={msg['code']}")
                     return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
             if matched_messages:
                 delay_seconds = random.randint(5, 10)
@@ -217,10 +281,13 @@ def register_mail_routes(app):
                     matched_messages = fetch_matching_messages(conn)
                 for msg in matched_messages:
                     if not msg["is_read"]:
-                        conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
-                        conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
-                        conn.commit()
-                        app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                        if not keep_message:
+                            conn.execute("DELETE FROM received_email_attachments WHERE email_id = ?", (msg["id"],))
+                            conn.execute("DELETE FROM received_emails WHERE id = ?", (msg["id"],))
+                            conn.commit()
+                            app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
+                        else:
+                            app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回验证码邮件但按 keep=1 保留 id={msg['id']} code={msg['code']}")
                         return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
                 return jsonify({"error": "Verification email not found"}), 404
             return jsonify({"error": "Verification email not found"}), 404
