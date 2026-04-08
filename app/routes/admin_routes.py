@@ -389,7 +389,7 @@ def register_admin_routes(app):
     @login_required
     @admin_required
     def manage_domains():
-        from app.repositories.mail_repo import add_managed_domain, delete_managed_domain, set_primary_domain, toggle_domain_active
+        from app.repositories.mail_repo import add_managed_domain, delete_managed_domain, set_primary_domain, set_primary_domain_mode, toggle_domain_active
 
         action = request.form.get("action", "").strip()
         try:
@@ -402,6 +402,15 @@ def register_admin_routes(app):
             elif action == "set_primary":
                 set_primary_domain(int(request.form.get("domain_id", "0") or 0))
                 flash("主域名设置成功", "success")
+            elif action == "set_primary_with_mode":
+                domain_id = int(request.form.get("domain_id", "0") or 0)
+                plus_alias_provider = (request.form.get("plus_alias_provider") or "").strip().lower()
+                plus_alias_base_email = request.form.get("plus_alias_base_email", "")
+                set_primary_domain_mode(domain_id, plus_alias_provider, plus_alias_base_email)
+                if plus_alias_provider in ("gmail.com", "outlook.com"):
+                    flash("主域名及 Gmail/Outlook 模式设置成功", "success")
+                else:
+                    flash("主域名设置成功", "success")
             elif action == "toggle_active":
                 toggle_domain_active(int(request.form.get("domain_id", "0") or 0))
                 flash("域名状态已更新", "success")
