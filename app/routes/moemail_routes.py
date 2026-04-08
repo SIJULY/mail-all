@@ -7,6 +7,42 @@ from flask import jsonify, request
 from app.config import MOEMAIL_DEFAULT_EXPIRY, MOEMAIL_DEFAULT_ROLE, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import ensure_managed_mailbox, get_managed_mailbox_by_id
+
+
+
+def build_mailbox_match_variants(mailbox_email: str):
+    raw_value = (mailbox_email or "").strip()
+    variants = []
+    if raw_value:
+        variants.append(raw_value)
+    if " " in raw_value and "+" not in raw_value and "@" in raw_value:
+        local_part, domain = raw_value.split("@", 1)
+        normalized = f"{local_part.replace(' ', '+')}@{domain}"
+        if normalized not in variants:
+            variants.append(normalized)
+    return variants
+
+
+
+def build_mailbox_message_query(mailbox_email: str):
+    variants = build_mailbox_match_variants(mailbox_email)
+    where_parts = []
+    params = []
+    priority_parts = []
+    priority_params = []
+    for variant in variants:
+        where_parts.append("lower(trim(recipient)) = lower(trim(?))")
+        params.append(variant)
+        priority_parts.append("lower(trim(recipient)) = lower(trim(?))")
+        priority_params.append(variant)
+    for variant in variants:
+        like_value = f"%{variant}%"
+        where_parts.append("lower(ifnull(subject, '')) LIKE lower(?)")
+        where_parts.append("lower(ifnull(body, '')) LIKE lower(?)")
+        params.extend([like_value, like_value])
+    priority_sql = " OR ".join(priority_parts) if priority_parts else "0"
+    where_sql = " OR ".join(where_parts) if where_parts else "0"
+    return where_sql, params, priority_sql, priority_params
 from app.services.message_service import serialize_moemail_message
 from app.services.settings_service import build_moemail_address, get_moemail_config_domains
 from app.utils.decorators import moemail_api_required
@@ -42,15 +78,16 @@ def register_moemail_routes(app):
             return jsonify({"messages": []})
         conn = get_db_conn()
         try:
+            where_sql, params, priority_sql, priority_params = build_mailbox_message_query(mailbox["email"])
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM received_emails
-                WHERE lower(trim(recipient)) = lower(trim(?))
+                WHERE ({where_sql})
                   AND is_read = 0
                   AND ifnull(is_deleted, 0) = 0
-                ORDER BY id DESC
+                ORDER BY CASE WHEN {priority_sql} THEN 0 ELSE 1 END, id DESC
                 """,
-                (mailbox["email"],),
+                params + priority_params,
             ).fetchall()
         finally:
             conn.close()
@@ -64,9 +101,10 @@ def register_moemail_routes(app):
             return jsonify({"message": None}), 404
         conn = get_db_conn()
         try:
+            where_sql, params, _priority_sql, _priority_params = build_mailbox_message_query(mailbox["email"])
             row = conn.execute(
-                "SELECT * FROM received_emails WHERE id = ? AND lower(trim(recipient)) = lower(trim(?)) AND ifnull(is_deleted, 0) = 0",
-                (str(message_id), mailbox["email"]),
+                f"SELECT * FROM received_emails WHERE id = ? AND ({where_sql}) AND ifnull(is_deleted, 0) = 0",
+                [str(message_id)] + params,
             ).fetchone()
             if not row:
                 return jsonify({"message": None}), 404
@@ -107,9 +145,10 @@ def register_moemail_routes(app):
             return jsonify({"success": False, "error": "mailbox not found"}), 404
         conn = get_db_conn()
         try:
+            where_sql, params, _priority_sql, _priority_params = build_mailbox_message_query(mailbox["email"])
             row = conn.execute(
-                "SELECT id FROM received_emails WHERE id = ? AND lower(trim(recipient)) = lower(trim(?)) AND ifnull(is_deleted, 0) = 0",
-                (str(message_id), mailbox["email"]),
+                f"SELECT id FROM received_emails WHERE id = ? AND ({where_sql}) AND ifnull(is_deleted, 0) = 0",
+                [str(message_id)] + params,
             ).fetchone()
         finally:
             conn.close()
