@@ -8,7 +8,7 @@ from app.config import MOEMAIL_DEFAULT_EXPIRY, MOEMAIL_DEFAULT_ROLE, SPECIAL_VIE
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import ensure_managed_mailbox, get_managed_mailbox_by_id
 from app.services.message_service import serialize_moemail_message
-from app.services.settings_service import choose_moemail_domain, get_moemail_config_domains
+from app.services.settings_service import build_moemail_address, get_moemail_config_domains
 from app.utils.decorators import moemail_api_required
 from app.utils.mail_utils import generate_local_part, normalize_domain, strip_tags_for_preview
 
@@ -30,8 +30,7 @@ def register_moemail_routes(app):
             name = generate_local_part(10)
         if not re.fullmatch(r"[a-z0-9._+-]{1,64}", name):
             return jsonify({"error": "invalid name"}), 400
-        domain = choose_moemail_domain(requested_domain)
-        email = f"{name}@{domain}"
+        email = build_moemail_address(name, requested_domain)
         mailbox = ensure_managed_mailbox(email, source="moemail_api")
         return jsonify({"id": str(mailbox["id"]), "email": mailbox["email"]})
 
@@ -120,3 +119,4 @@ def register_moemail_routes(app):
 
 
 __all__ = ["register_moemail_routes"]
+# step3 route marker
