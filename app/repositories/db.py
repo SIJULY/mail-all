@@ -34,6 +34,13 @@ def init_db():
             is_active BOOLEAN DEFAULT 1,
             is_primary BOOLEAN DEFAULT 0,
             is_wildcard BOOLEAN DEFAULT 0,
+            entry_type TEXT DEFAULT 'domain',
+            base_local_part TEXT DEFAULT '',
+            base_domain TEXT DEFAULT '',
+            plus_alias_provider TEXT DEFAULT '',
+            plus_alias_base_email TEXT DEFAULT '',
+            plus_alias_local_part TEXT DEFAULT '',
+            plus_alias_domain TEXT DEFAULT '',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -108,6 +115,29 @@ def init_db():
     if "is_wildcard" not in domain_columns:
         cursor.execute("ALTER TABLE managed_domains ADD COLUMN is_wildcard BOOLEAN DEFAULT 0")
         conn.commit()
+    if "entry_type" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN entry_type TEXT DEFAULT 'domain'")
+        conn.commit()
+    if "base_local_part" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN base_local_part TEXT DEFAULT ''")
+        conn.commit()
+    if "base_domain" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN base_domain TEXT DEFAULT ''")
+        conn.commit()
+    if "plus_alias_provider" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN plus_alias_provider TEXT DEFAULT ''")
+        conn.commit()
+    if "plus_alias_base_email" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN plus_alias_base_email TEXT DEFAULT ''")
+        conn.commit()
+    if "plus_alias_local_part" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN plus_alias_local_part TEXT DEFAULT ''")
+        conn.commit()
+    if "plus_alias_domain" not in domain_columns:
+        cursor.execute("ALTER TABLE managed_domains ADD COLUMN plus_alias_domain TEXT DEFAULT ''")
+        conn.commit()
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_domains_unique_entry ON managed_domains (entry_type, domain)")
+    conn.commit()
 
     cursor.execute("PRAGMA table_info(draft_emails)")
     draft_columns = [row["name"] for row in cursor.fetchall()]
