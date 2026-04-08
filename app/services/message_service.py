@@ -6,11 +6,12 @@ from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import Message
 from email.policy import default as email_policy
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from typing import Dict, List
 
 from app.config import SERVER_PUBLIC_IP
 from app.repositories.db import get_db_conn
+from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
 from app.utils.mail_utils import strip_tags_for_preview
 
@@ -104,6 +105,87 @@ def extract_attachments_from_message(message: Message) -> List[Dict[str, object]
 
 
 
+def _flatten_recipient_values(raw_value) -> List[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        result: List[str] = []
+        for item in raw_value:
+            result.extend(_flatten_recipient_values(item))
+        return result
+    return [str(raw_value or "")]
+
+
+
+def _normalize_recipient_candidates(raw_value) -> List[str]:
+    values = _flatten_recipient_values(raw_value)
+
+    flattened_values: List[str] = []
+    for value in values:
+        if not value:
+            continue
+        if value.startswith("[") and value.endswith("]"):
+            flattened_values.extend(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", value))
+        else:
+            flattened_values.append(value)
+
+    parsed_values: List[str] = []
+    for value in flattened_values:
+        if not value:
+            continue
+        parsed_addrs = [addr for _, addr in getaddresses([value]) if addr and "@" in addr]
+        parsed_values.extend(parsed_addrs)
+        if "," in value:
+            parsed_values.extend([part.strip() for part in value.split(",") if "@" in part])
+        elif "@" in value and not parsed_addrs:
+            parsed_values.append(value.strip())
+
+    normalized: List[str] = []
+    seen = set()
+    for addr in parsed_values:
+        candidate = addr.strip().lower()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            normalized.append(candidate)
+    return normalized
+
+
+
+def _pick_matching_recipient(candidates: List[str]) -> str:
+    for candidate in candidates:
+        mailbox = get_managed_mailbox_by_email(candidate)
+        if mailbox:
+            return mailbox["email"]
+    for candidate in candidates:
+        resolved = resolve_inbound_mailbox_address(candidate)
+        mailbox = get_managed_mailbox_by_email(resolved)
+        if mailbox:
+            return mailbox["email"]
+        if resolved != candidate:
+            return resolved
+    return ""
+
+
+
+def resolve_inbound_recipient(message: Message, to_address) -> str:
+    envelope_candidates = _normalize_recipient_candidates(to_address)
+    header_candidates: List[str] = []
+    for header_name in ["Delivered-To", "X-Original-To", "X-Forwarded-To", "To", "Cc"]:
+        header_candidates.extend(_normalize_recipient_candidates(message.get_all(header_name, [])))
+
+    for candidates in (envelope_candidates, header_candidates):
+        matched_recipient = _pick_matching_recipient(candidates)
+        if matched_recipient:
+            return matched_recipient
+
+    if envelope_candidates:
+        return resolve_inbound_mailbox_address(envelope_candidates[0])
+    if header_candidates:
+        return resolve_inbound_mailbox_address(header_candidates[0])
+    return resolve_inbound_mailbox_address(str(to_address).strip().lower())
+
+
+
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data, policy=email_policy)
     subject = decode_mime_header_value(msg.get("Subject", "")).strip()
@@ -116,16 +198,7 @@ def process_email_data(to_address, raw_email_data):
         if keyword in subject_lower:
             return
 
-    final_recipient = None
-    for header_name in ["Delivered-To", "X-Original-To", "X-Forwarded-To", "To"]:
-        header_value = msg.get(header_name)
-        if header_value:
-            _, recipient_addr = parseaddr(str(header_value))
-            if recipient_addr and "@" in recipient_addr:
-                final_recipient = recipient_addr.strip().lower()
-                break
-    if not final_recipient:
-        final_recipient = str(to_address).strip().lower()
+    final_recipient = resolve_inbound_recipient(msg, to_address)
 
     final_sender = None
     icloud_hme_header = msg.get("X-ICLOUD-HME")
