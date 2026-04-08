@@ -12,7 +12,7 @@ from app.services.message_service import process_email_data
 class CustomSMTPHandler:
     async def handle_DATA(self, server, session_obj, envelope):
         try:
-            process_email_data(",".join(envelope.rcpt_tos), envelope.content)
+            process_email_data(envelope.rcpt_tos, envelope.content)
             return "250 OK"
         except Exception as e:
             logging.getLogger(__name__).error(f"处理邮件时发生严重错误: {e}")
