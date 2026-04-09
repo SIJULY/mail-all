@@ -7,7 +7,7 @@ from app.repositories.db import get_db_conn
 from app.utils.mail_utils import generate_subdomain_label, normalize_domain, normalize_email_address
 
 
-PLUS_ALIAS_SUPPORTED_DOMAINS = {"gmail.com", "outlook.com"}
+PLUS_ALIAS_SUPPORTED_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com"}
 
 
 def get_managed_mailbox_by_id(mailbox_id: Any):
@@ -172,7 +172,7 @@ def add_managed_domain(domain: str, is_wildcard: bool = False) -> None:
     if not raw_value:
         raise ValueError("域名不能为空")
     if "@" in raw_value:
-        raise ValueError("域名管理中仅允许填写域名；如需配置 Gmail / Outlook 模式，请先添加域名再在设为主域名时配置")
+        raise ValueError("域名管理中仅允许填写域名；如需配置 Gmail / Outlook / Hotmail 模式，请先添加域名再在设为主域名时配置")
 
     normalized_domain = normalize_domain(raw_value)
     if "." not in normalized_domain:
@@ -207,14 +207,14 @@ def set_primary_domain_mode(domain_id: int, provider: str = "", base_email: str 
 
     if mode_enabled:
         if not base_email or "@" not in base_email:
-            raise ValueError("请填写 Gmail / Outlook 基础邮箱地址")
+            raise ValueError("请填写 Gmail / Outlook / Hotmail 基础邮箱地址")
         local_part, email_domain = base_email.split("@", 1)
         local_part = local_part.strip().lower()
         email_domain = normalize_domain(email_domain)
         if provider != email_domain:
             raise ValueError("所选邮箱模式与填写的邮箱地址不匹配")
         if email_domain not in PLUS_ALIAS_SUPPORTED_DOMAINS:
-            raise ValueError("当前仅支持 Gmail / Outlook 邮箱模式")
+            raise ValueError("当前仅支持 Gmail / Outlook / Hotmail 邮箱模式")
         if not local_part:
             raise ValueError("邮箱格式不正确")
         if "+" in local_part:
