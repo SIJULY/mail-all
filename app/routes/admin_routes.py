@@ -404,8 +404,13 @@ def register_admin_routes(app):
                 flash("主域名设置成功", "success")
             elif action == "set_primary_with_mode":
                 domain_id = int(request.form.get("domain_id", "0") or 0)
-                plus_alias_provider = (request.form.get("plus_alias_provider") or "").strip().lower()
+                plus_alias_enabled = request.form.get("plus_alias_enabled") in ("1", "on", "true")
                 plus_alias_base_email = request.form.get("plus_alias_base_email", "")
+                plus_alias_provider = ""
+                if plus_alias_enabled:
+                    normalized_base_email = normalize_email_address(plus_alias_base_email)
+                    if "@" in normalized_base_email:
+                        plus_alias_provider = normalized_base_email.rsplit("@", 1)[1].strip().lower()
                 set_primary_domain_mode(domain_id, plus_alias_provider, plus_alias_base_email)
                 if plus_alias_provider in ("gmail.com", "outlook.com"):
                     flash("主域名及 Gmail/Outlook 模式设置成功", "success")
