@@ -1,8 +1,15 @@
 """邮件工具模块。"""
 
+import html
 import random
 import re
 import string
+
+
+def _is_likely_year_token(value: str) -> bool:
+    value = str(value or "").strip()
+    return len(value) == 4 and value.isdigit() and 1900 <= int(value) <= 2099
+
 
 
 def extract_code_from_body(body_text):
@@ -26,25 +33,44 @@ def extract_code_from_body(body_text):
         "one-time password",
         "otp",
     ]
+    has_code_keyword = any(keyword in body_lower for keyword in code_keywords)
 
-    if any(keyword in body_lower for keyword in code_keywords):
+    if has_code_keyword:
         semantic_patterns = [
-            r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp)[^\d]{0,30}(\d{6})",
+            r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp)[^\d]{0,30}(\d{4,8})",
+            r"(?:code|验证码|驗證碼|検証コード|otp)[^\d]{0,12}(\d{4,8})",
         ]
         for pat in semantic_patterns:
             m = re.search(pat, body_text, re.IGNORECASE)
             if m:
-                return m.group(1)
+                code = m.group(1)
+                if not _is_likely_year_token(code):
+                    return code
 
     m = re.search(r"(?<!\d)(\d{6})(?!\d)", body_text)
     if m:
         return m.group(1)
 
-    m = re.search(r"\b(\d{4,8})\b", body_text)
-    if m:
-        return m.group(1)
-
     return None
+
+
+
+def linkify_plain_text(text: str) -> str:
+    raw_text = str(text or "")
+    escaped_text = html.escape(raw_text)
+    url_pattern = re.compile(r"(?P<url>(?:https?://|www\.)[^\s<]+)", re.IGNORECASE)
+
+    def replace_match(match):
+        display_url = match.group("url")
+        trailing = ""
+        while display_url and display_url[-1] in ".,;:!?)\]}":
+            trailing = display_url[-1] + trailing
+            display_url = display_url[:-1]
+        href = display_url if display_url.lower().startswith(("http://", "https://")) else f"https://{display_url}"
+        return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{display_url}</a>{trailing}'
+
+    linked_text = url_pattern.sub(replace_match, escaped_text)
+    return linked_text.replace("\n", "<br>")
 
 
 
