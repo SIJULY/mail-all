@@ -472,6 +472,16 @@ show_summary() {
   echo "数据库位置:"
   echo "  ${PROJECT_DIR}/${DB_FILE_VALUE}"
   echo "========================================"
+  echo
+  ok "【域名设置说明】"
+  echo "系统已安装完毕，请按以下步骤配置你的域名以正常收发邮件："
+  echo "1. 登录后台 -> 点击左侧栏「管理域名」 -> 添加你需要使用的域名。"
+  echo "2. 前往你的域名 DNS 提供商，为该域名添加以下记录："
+  echo "   - A 记录: 主机名填 mail，值填 ${SERVER_PUBLIC_IP_VALUE}"
+  echo "   - MX 记录: 主机名填 @ (或留空)，值填 mail.你的域名，优先级 10"
+  echo "   - TXT 记录: 主机名填 @ (或留空)，值填 v=spf1 mx a ipv4:${SERVER_PUBLIC_IP_VALUE} ~all"
+  echo "   - TXT 记录: 主机名填 _dmarc，值填 v=DMARC1; p=none;"
+  echo "========================================"
 }
 
 uninstall_server() {
@@ -512,16 +522,18 @@ main_menu() {
   echo "========================================"
   echo " 小龙女她爸邮局服务系统 - 拆分版安装脚本"
   echo "========================================"
-  echo "1) 更新代码（保留现有配置和数据库）"
-  echo "2) 重装 / 初始化（可修改配置，默认保留数据库）"
-  echo "3) 卸载"
+  echo "1) 全新安装（清空原有数据重新安装，或首次安装）"
+  echo "2) 更新代码（保留现有配置和数据库）"
+  echo "3) 重装 / 初始化（可修改配置，默认保留数据库）"
+  echo "4) 卸载"
   echo "========================================"
-  read -rp "请选择 [1-3]: " action
+  read -rp "请选择 [1-4]: " action
 
   case "${action}" in
-    1) INSTALL_MODE="update" ;;
-    2) INSTALL_MODE="reinstall" ;;
-    3) uninstall_server ;;
+    1) INSTALL_MODE="fresh" ;;
+    2) INSTALL_MODE="update" ;;
+    3) INSTALL_MODE="reinstall" ;;
+    4) uninstall_server ;;
     *) err "无效选择"; exit 1 ;;
   esac
 }
@@ -670,11 +682,57 @@ reinstall_flow() {
   install_flow
 }
 
+fresh_flow() {
+  if [ -d "${PROJECT_DIR}" ]; then
+    warn "注意：全新安装将清空现有的所有配置和数据库！"
+    read -rp "确定要继续吗？(输入 yes 确认): " confirm
+    if [ "${confirm}" != "yes" ]; then
+      echo "已取消全新安装。"
+      exit 0
+    fi
+    backup_existing_install
+    systemctl stop "${SERVICE_WEB}" 2>/dev/null || true
+    systemctl stop "${SERVICE_SMTP}" 2>/dev/null || true
+    rm -rf "${PROJECT_DIR}"
+  fi
+  
+  # Reset variables for a fresh installation
+  EXISTING_WEB_PORT="2099"
+  EXISTING_SMTP_LISTEN_PORT="25"
+  EXISTING_ADMIN_USERNAME="admin"
+  EXISTING_SYSTEM_TITLE="Mail API Service"
+  EXISTING_SERVER_PUBLIC_IP=""
+  EXISTING_SMTP_SERVER="smtp.sendgrid.net"
+  EXISTING_SMTP_PORT="587"
+  EXISTING_SMTP_USERNAME="apikey"
+  EXISTING_SMTP_PASSWORD=""
+  EXISTING_DEFAULT_SENDER=""
+  EXISTING_SPECIAL_VIEW_TOKEN="2088"
+  EXISTING_MOEMAIL_API_KEY="2088"
+  EXISTING_MOEMAIL_DEFAULT_EXPIRY="3600000"
+  EXISTING_MOEMAIL_DEFAULT_ROLE="user"
+  EXISTING_DB_FILE_BASENAME="emails.db"
+  EXISTING_LAST_CLEANUP_BASENAME="last_cleanup.txt"
+
+  cleanup_legacy_mail_services
+  create_project_dir
+  install_system_packages
+  setup_venv
+  prepare_app_source
+  write_requirements_if_missing
+  install_python_packages
+  collect_inputs
+  install_flow
+}
+
 require_root
 load_existing_install_defaults
 main_menu
 
 case "${INSTALL_MODE}" in
+  fresh)
+    fresh_flow
+    ;;
   update)
     update_flow
     ;;
