@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.idea/
+.vscode/
+
+# Database
+*.sqlite3
+*.db
+emails.db
+
+# Runtime
+last_cleanup.txt
+
+# Environment
+.venv/
+venv/
+ENV/
+env/
