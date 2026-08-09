@@ -506,14 +506,20 @@ def register_ui_routes(app):
                     bjt_str = utc_dt.astimezone(beijing_tz).strftime(
                         "%Y-%m-%d %H:%M:%S"
                     )
-                    body_content = strip_tags_for_preview(original_email["body"] or "")
-                    quoted_text = "\n".join(
-                        [f"> {line}" for line in body_content.splitlines()]
-                    )
+                    original_body = original_email["body"] or ""
+                    original_body_type = original_email.get("body_type") or "text"
                     
-                    quoted_text_html = "<br>".join(
-                        [f"> {line}" for line in body_content.splitlines()]
+                    body_content_text = strip_tags_for_preview(original_body)
+                    quoted_text = "\n".join(
+                        [f"> {line}" for line in body_content_text.splitlines()]
                     )
+
+                    if original_body_type.lower() == "html":
+                        quoted_text_html = original_body
+                    else:
+                        quoted_text_html = "<br>".join(
+                            [f"> {line}" for line in original_body.splitlines()]
+                        )
                     if reply_to_id:
                         form_data["body"] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
                         form_data["html_body"] = f"<br><br><br><div>--- On {bjt_str}, {original_email['sender']} wrote: ---</div><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
