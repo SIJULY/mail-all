@@ -382,6 +382,14 @@ def render_email_list_page(
                 filter=filter_type,
                 per_page=per_page,
             ),
+            "forward_url": url_for(
+                "compose_email",
+                forward_id=selected_email["id"],
+                page=page,
+                search=search_query,
+                filter=filter_type,
+                per_page=per_page,
+            ),
             "can_delete": can_delete,
             "can_restore": bool(is_trash_detail and not token_view_context),
             "delete_label": (
