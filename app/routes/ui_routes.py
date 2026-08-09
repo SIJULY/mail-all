@@ -514,7 +514,7 @@ def register_ui_routes(app):
                         [f"> {line}" for line in body_content_text.splitlines()]
                     )
 
-                    if original_body_type.lower() == "html":
+                    if "html" in original_body_type.lower():
                         quoted_text_html = original_body
                     else:
                         quoted_text_html = "<br>".join(
