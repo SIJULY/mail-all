@@ -176,7 +176,7 @@ def render_email_list_page(
     processed_emails = []
     beijing_tz = ZoneInfo("Asia/Shanghai")
     smtp_cfg = get_smtp_config()
-    sending_enabled = bool(smtp_cfg["password"] and smtp_cfg["default_sender"])
+    sending_enabled = bool((smtp_cfg.get("password") or smtp_cfg.get("resend_token")) and smtp_cfg.get("default_sender"))
     managed_domains = get_managed_domains(include_inactive=True) if is_admin_view and not token_view_context else []
     managed_users = get_managed_users() if is_admin_view and not token_view_context else []
     if inbox_count is None:
