@@ -36,13 +36,6 @@ def register_admin_routes(app):
         from app.routes.mail_routes import base_view_logic
         return base_view_logic(is_admin_view=True, nav_mode="users")
 
-    @app.route("/admin/smtp")
-    @login_required
-    @admin_required
-    def admin_smtp():
-        from app.routes.mail_routes import base_view_logic
-        return base_view_logic(is_admin_view=True, nav_mode="smtp")
-
     @app.route("/admin/system")
     @login_required
     @admin_required
@@ -466,7 +459,7 @@ def register_admin_routes(app):
         
         if not default_sender:
             flash("默认发件邮箱不能为空", "error")
-            return redirect(url_for("admin_smtp"))
+            return redirect(url_for("admin_system"))
             
         try:
             if send_mode == "resend":
@@ -481,17 +474,17 @@ def register_admin_routes(app):
                 
                 if not smtp_server:
                     flash("SMTP Server 不能为空", "error")
-                    return redirect(url_for("admin_smtp"))
+                    return redirect(url_for("admin_system"))
                 if not smtp_port:
                     flash("SMTP Port 不能为空", "error")
-                    return redirect(url_for("admin_smtp"))
+                    return redirect(url_for("admin_system"))
                 try:
                     port_int = int(smtp_port)
                     if port_int <= 0 or port_int > 65535:
                         raise ValueError()
                 except Exception:
                     flash("SMTP Port 格式不正确", "error")
-                    return redirect(url_for("admin_smtp"))
+                    return redirect(url_for("admin_system"))
                     
                 set_app_setting("smtp_server", smtp_server)
                 set_app_setting("smtp_port", str(port_int))
@@ -508,7 +501,7 @@ def register_admin_routes(app):
         except Exception as e:
             app.logger.error(f"保存发信配置失败: {e}")
             flash(f"保存发信配置失败: {e}", "error")
-        return redirect(url_for("admin_smtp"))
+        return redirect(url_for("admin_system"))
 
     @app.route("/send_test_smtp_email", methods=["POST"])
     @login_required
@@ -520,10 +513,10 @@ def register_admin_routes(app):
             test_recipient = cfg.get("default_sender")
         if not test_recipient or "@" not in test_recipient:
             flash("无法获取测试收件人(请检查默认发件邮箱)", "error")
-            return redirect(url_for("admin_smtp"))
+            return redirect(url_for("admin_system"))
         if (not cfg.get("password") and not cfg.get("resend_token")) or not cfg.get("default_sender"):
             flash("请先完成发信配置后再发送测试邮件", "error")
-            return redirect(url_for("admin_smtp"))
+            return redirect(url_for("admin_system"))
         subject = "测试邮件"
         text_body = "这是一封测试邮件。\n\n" f"发信模式：{cfg.get('send_mode', 'smtp')}\n" f"默认发件人：{cfg.get('default_sender')}\n" "如果你收到这封邮件，说明当前发信配置可用。"
         import html
@@ -538,7 +531,7 @@ def register_admin_routes(app):
     """
         success, message = send_email_via_smtp_config(test_recipient, subject, text_body, html_body, cfg)
         flash(message, "success" if success else "error")
-        return redirect(url_for("admin_smtp"))
+        return redirect(url_for("admin_system"))
 
     @app.route("/manage_system_settings", methods=["POST"])
     @login_required
