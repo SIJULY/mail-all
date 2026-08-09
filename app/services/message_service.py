@@ -307,12 +307,20 @@ def process_email_data(to_address, raw_email_data):
         
         if tg_enabled == "1" and tg_bot_token and tg_chat_id:
             import requests
+            import html
+            import re
             
-            preview = body[:150] + "..." if len(body) > 150 else body
-            tg_text = f"📧 **收到新邮件**\n\n"
+            # strip html tags for preview
+            clean_body = re.sub(r'<[^>]+>', '', body)
+            preview = clean_body[:150] + "..." if len(clean_body) > 150 else clean_body
+            
+            tg_text = f"📧 <b>收到新邮件</b>\n\n"
+            
+            # also check both keys for compatibility
+            tg_recipient_display = get_app_setting("tg_recipient_display") or get_app_setting("tg_recipient_format", "show")
             
             if tg_recipient_display == "show":
-                tg_text += f"**收件人:** `{final_recipient}`\n"
+                tg_text += f"<b>收件人:</b> <code>{html.escape(final_recipient)}</code>\n"
                 
             sender_name, sender_addr = email.utils.parseaddr(final_sender)
             if tg_sender_format == "name" and sender_name:
@@ -322,17 +330,20 @@ def process_email_data(to_address, raw_email_data):
             else:
                 display_sender = final_sender
                 
-            tg_text += f"**发件人:** `{display_sender}`\n"
-            tg_text += f"**主题:** {subject}\n\n"
-            tg_text += f"{preview}"
+            tg_text += f"<b>发件人:</b> <code>{html.escape(display_sender)}</code>\n"
+            tg_text += f"<b>主题:</b> {html.escape(subject)}\n\n"
+            tg_text += f"{html.escape(preview)}"
             
             url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
             payload = {
                 "chat_id": tg_chat_id,
                 "text": tg_text,
-                "parse_mode": "Markdown"
+                "parse_mode": "HTML"
             }
-            requests.post(url, json=payload, timeout=5)
+            res = requests.post(url, json=payload, timeout=5)
+            if res.status_code != 200:
+                import logging
+                logging.getLogger(__name__).error(f"Telegram通知响应错误: {res.text}")
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
