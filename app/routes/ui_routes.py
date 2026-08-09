@@ -511,13 +511,17 @@ def register_ui_routes(app):
                         [f"> {line}" for line in body_content.splitlines()]
                     )
                     
+                    quoted_text_html = "<br>".join(
+                        [f"> {line}" for line in body_content.splitlines()]
+                    )
                     if reply_to_id:
                         form_data["body"] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
+                        form_data["html_body"] = f"<br><br><br><div>--- On {bjt_str}, {original_email['sender']} wrote: ---</div><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
                     else:
                         form_data["body"] = f"\n\n\n--- Forwarded message ---\nFrom: {original_email['sender']}\nDate: {bjt_str}\nSubject: {original_subject}\n\n{quoted_text}"
-                        
-                    form_data["html_body"] = ""
-                    form_data["editor_mode"] = "text"
+                        form_data["html_body"] = f"<br><br><br><div>--- Forwarded message ---</div><div>From: {original_email['sender']}</div><div>Date: {bjt_str}</div><div>Subject: {original_subject}</div><br><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
+
+                    form_data["editor_mode"] = "html"
                     form_data["attachments"] = []
             except Exception as e:
                 app.logger.error(f"加载回复邮件时出错: {e}")
