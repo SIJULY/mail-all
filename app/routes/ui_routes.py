@@ -460,8 +460,9 @@ def register_ui_routes(app):
                     )
 
         reply_to_id = request.args.get("reply_to_id")
+        forward_id = request.args.get("forward_id")
         if (
-            reply_to_id
+            (reply_to_id or forward_id)
             and not draft_id
             and not (
                 form_data.get("to")
@@ -473,7 +474,7 @@ def register_ui_routes(app):
             try:
                 conn = get_db_conn()
                 query = "SELECT * FROM received_emails WHERE id = ? AND ifnull(is_deleted, 0) = 0"
-                params = [reply_to_id]
+                params = [reply_to_id if reply_to_id else forward_id]
                 if not is_admin_view:
                     query += " AND recipient = ?"
                     params.append(session["user_email"])
@@ -481,13 +482,23 @@ def register_ui_routes(app):
                 conn.close()
                 if original_email:
                     _, parsed_sender = parseaddr(original_email["sender"])
-                    form_data["to"] = parsed_sender or ""
                     original_subject = original_email["subject"] or ""
-                    form_data["subject"] = (
-                        original_subject
-                        if original_subject.lower().startswith("re:")
-                        else f"Re: {original_subject}"
-                    )
+                    
+                    if reply_to_id:
+                        form_data["to"] = parsed_sender or ""
+                        form_data["subject"] = (
+                            original_subject
+                            if original_subject.lower().startswith("re:")
+                            else f"Re: {original_subject}"
+                        )
+                    else:
+                        form_data["to"] = ""
+                        form_data["subject"] = (
+                            original_subject
+                            if original_subject.lower().startswith("fwd:")
+                            else f"Fwd: {original_subject}"
+                        )
+                        
                     beijing_tz = ZoneInfo("Asia/Shanghai")
                     utc_dt = datetime.strptime(
                         original_email["timestamp"], "%Y-%m-%d %H:%M:%S"
@@ -499,9 +510,12 @@ def register_ui_routes(app):
                     quoted_text = "\n".join(
                         [f"> {line}" for line in body_content.splitlines()]
                     )
-                    form_data["body"] = (
-                        f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
-                    )
+                    
+                    if reply_to_id:
+                        form_data["body"] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
+                    else:
+                        form_data["body"] = f"\n\n\n--- Forwarded message ---\nFrom: {original_email['sender']}\nDate: {bjt_str}\nSubject: {original_subject}\n\n{quoted_text}"
+                        
                     form_data["html_body"] = ""
                     form_data["editor_mode"] = "text"
                     form_data["attachments"] = []
