@@ -15,7 +15,9 @@ def register_ui_routes(app):
     @app.route("/")
     @login_required
     def index():
-        return redirect(url_for("admin_view") if session.get("is_admin") else url_for("view_emails"))
+        return redirect(
+            url_for("admin_view") if session.get("is_admin") else url_for("view_emails")
+        )
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -56,7 +58,9 @@ def register_ui_routes(app):
     def view_trash(email_id=None):
         from app.routes.mail_routes import base_view_logic
 
-        return base_view_logic(is_admin_view=bool(session.get("is_admin")), nav_mode="trash")
+        return base_view_logic(
+            is_admin_view=bool(session.get("is_admin")), nav_mode="trash"
+        )
 
     def _load_nav_mailbox_data(include_sent_details=False):
         from app.repositories.db import get_db_conn
@@ -86,7 +90,9 @@ def register_ui_routes(app):
     @app.route("/drafts")
     @login_required
     def view_drafts():
-        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")), nav_mode="inbox")
+        inbox_context = build_mail_query_context(
+            is_admin_view=bool(session.get("is_admin")), nav_mode="inbox"
+        )
         rows, sent_rows = _load_nav_mailbox_data(include_sent_details=False)
 
         draft_items = []
@@ -127,7 +133,9 @@ def register_ui_routes(app):
     @app.route("/sent/<int:sent_id>")
     @login_required
     def view_sent(sent_id=None):
-        inbox_context = build_mail_query_context(is_admin_view=bool(session.get("is_admin")), nav_mode="inbox")
+        inbox_context = build_mail_query_context(
+            is_admin_view=bool(session.get("is_admin")), nav_mode="inbox"
+        )
         draft_rows, rows = _load_nav_mailbox_data(include_sent_details=True)
 
         sent_items = []
@@ -198,7 +206,10 @@ def register_ui_routes(app):
             conn.commit()
         finally:
             conn.close()
-        flash("草稿已删除" if result.rowcount else "草稿不存在或无权删除", "success" if result.rowcount else "error")
+        flash(
+            "草稿已删除" if result.rowcount else "草稿不存在或无权删除",
+            "success" if result.rowcount else "error",
+        )
         return redirect(url_for("view_drafts"))
 
     @app.route("/delete_selected_drafts", methods=["POST"])
@@ -221,7 +232,10 @@ def register_ui_routes(app):
             conn.commit()
         finally:
             conn.close()
-        flash(f"已删除 {result.rowcount} 封草稿" if result.rowcount else "未删除任何草稿", "success" if result.rowcount else "error")
+        flash(
+            f"已删除 {result.rowcount} 封草稿" if result.rowcount else "未删除任何草稿",
+            "success" if result.rowcount else "error",
+        )
         return redirect(url_for("view_drafts"))
 
     @app.route("/delete_sent/<int:sent_id>", methods=["POST"])
@@ -241,7 +255,10 @@ def register_ui_routes(app):
             conn.commit()
         finally:
             conn.close()
-        flash("已发送邮件已删除" if result.rowcount else "邮件不存在或无权删除", "success" if result.rowcount else "error")
+        flash(
+            "已发送邮件已删除" if result.rowcount else "邮件不存在或无权删除",
+            "success" if result.rowcount else "error",
+        )
         return redirect(url_for("view_sent"))
 
     @app.route("/delete_selected_sent", methods=["POST"])
@@ -266,16 +283,28 @@ def register_ui_routes(app):
             conn.commit()
         finally:
             conn.close()
-        flash(f"已删除 {result.rowcount} 封已发送邮件" if result.rowcount else "未删除任何已发送邮件", "success" if result.rowcount else "error")
+        flash(
+            (
+                f"已删除 {result.rowcount} 封已发送邮件"
+                if result.rowcount
+                else "未删除任何已发送邮件"
+            ),
+            "success" if result.rowcount else "error",
+        )
         return redirect(url_for("view_sent"))
 
     @app.route("/compose", methods=["GET", "POST"])
     @login_required
     def compose_email():
         from app.repositories.db import get_db_conn
-        from app.services.smtp_service import build_attachments_from_files, get_smtp_config, send_email_via_smtp
+        from app.services.smtp_service import (
+            build_attachments_from_files,
+            get_smtp_config,
+            send_email_via_smtp,
+        )
         from app.utils.mail_utils import strip_tags_for_preview
         from email.utils import parseaddr
+
         try:
             from zoneinfo import ZoneInfo
         except ImportError:
@@ -284,8 +313,17 @@ def register_ui_routes(app):
 
         smtp_cfg = get_smtp_config()
         is_admin_view = bool(session.get("is_admin"))
-        context = build_mail_query_context(is_admin_view=is_admin_view, nav_mode="inbox")
-        form_data = {"to": "", "subject": "", "body": "", "html_body": "", "editor_mode": "text", "attachments": []}
+        context = build_mail_query_context(
+            is_admin_view=is_admin_view, nav_mode="inbox"
+        )
+        form_data = {
+            "to": "",
+            "subject": "",
+            "body": "",
+            "html_body": "",
+            "editor_mode": "text",
+            "attachments": [],
+        }
         draft_id = request.args.get("draft_id", type=int)
 
         if draft_id:
@@ -298,12 +336,17 @@ def register_ui_routes(app):
             finally:
                 conn.close()
             if draft_row:
+                html_body_val = draft_row["html_body"] or ""
+                body_val = draft_row["body"] or ""
+                if not html_body_val and body_val:
+                    html_body_val = str(body_val).replace("\n", "<br>")
+
                 form_data = {
                     "to": draft_row["to_address"] or "",
                     "subject": draft_row["subject"] or "",
-                    "body": draft_row["body"] or "",
-                    "html_body": draft_row["html_body"] or "",
-                    "editor_mode": (draft_row["editor_mode"] or "text").strip().lower() or "text",
+                    "body": body_val,
+                    "html_body": html_body_val,
+                    "editor_mode": "html",
                     "attachments": [],
                 }
 
@@ -318,8 +361,19 @@ def register_ui_routes(app):
             if editor_mode not in ("text", "html"):
                 editor_mode = "text"
             uploaded_files = request.files.getlist("attachments")
-            attachment_names = [f.filename.strip() for f in uploaded_files if f and (f.filename or "").strip()]
-            form_data = {"to": to_address, "subject": subject, "body": body, "html_body": html_body, "editor_mode": editor_mode, "attachments": attachment_names}
+            attachment_names = [
+                f.filename.strip()
+                for f in uploaded_files
+                if f and (f.filename or "").strip()
+            ]
+            form_data = {
+                "to": to_address,
+                "subject": subject,
+                "body": body,
+                "html_body": html_body,
+                "editor_mode": editor_mode,
+                "attachments": attachment_names,
+            }
 
             if action == "save_draft":
                 conn = get_db_conn()
@@ -327,12 +381,27 @@ def register_ui_routes(app):
                     if draft_id:
                         conn.execute(
                             "UPDATE draft_emails SET to_address = ?, subject = ?, body = ?, html_body = ?, editor_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_email = ?",
-                            (to_address, subject, body, html_body, editor_mode, draft_id, session["user_email"]),
+                            (
+                                to_address,
+                                subject,
+                                body,
+                                html_body,
+                                editor_mode,
+                                draft_id,
+                                session["user_email"],
+                            ),
                         )
                     else:
                         conn.execute(
                             "INSERT INTO draft_emails (owner_email, to_address, subject, body, html_body, editor_mode) VALUES (?, ?, ?, ?, ?, ?)",
-                            (session["user_email"], to_address, subject, body, html_body, editor_mode),
+                            (
+                                session["user_email"],
+                                to_address,
+                                subject,
+                                body,
+                                html_body,
+                                editor_mode,
+                            ),
                         )
                     conn.commit()
                 finally:
@@ -340,14 +409,22 @@ def register_ui_routes(app):
                 flash("草稿已保存", "success")
                 return redirect(url_for("view_drafts"))
 
-            sending_enabled = bool((smtp_cfg.get("password") or smtp_cfg.get("resend_token")) and smtp_cfg.get("default_sender"))
+            sending_enabled = bool(
+                (smtp_cfg.get("password") or smtp_cfg.get("resend_token"))
+                and smtp_cfg.get("default_sender")
+            )
             if not sending_enabled:
-                flash("发件功能未配置。请先在后台左侧的发信设置中完成 SMTP / API Key 配置。", "error")
+                flash(
+                    "发件功能未配置。请先在后台左侧的发信设置中完成 SMTP / API Key 配置。",
+                    "error",
+                )
             elif not to_address or not subject:
                 flash("收件人和主题不能为空！", "error")
             else:
                 attachments = build_attachments_from_files(uploaded_files)
-                success, message = send_email_via_smtp(to_address, subject, body, html_body, attachments=attachments)
+                success, message = send_email_via_smtp(
+                    to_address, subject, body, html_body, attachments=attachments
+                )
                 flash(message, "success" if success else "error")
                 if success:
                     conn = get_db_conn()
@@ -372,10 +449,27 @@ def register_ui_routes(app):
                     finally:
                         conn.close()
                     target = "admin_view" if is_admin_view else "view_emails"
-                    return redirect(url_for(target, page=context["page"], search=context["search_query"], filter=context["filter_type"], per_page=context["per_page"]))
+                    return redirect(
+                        url_for(
+                            target,
+                            page=context["page"],
+                            search=context["search_query"],
+                            filter=context["filter_type"],
+                            per_page=context["per_page"],
+                        )
+                    )
 
         reply_to_id = request.args.get("reply_to_id")
-        if reply_to_id and not draft_id and not (form_data.get("to") or form_data.get("subject") or form_data.get("body") or form_data.get("html_body")):
+        if (
+            reply_to_id
+            and not draft_id
+            and not (
+                form_data.get("to")
+                or form_data.get("subject")
+                or form_data.get("body")
+                or form_data.get("html_body")
+            )
+        ):
             try:
                 conn = get_db_conn()
                 query = "SELECT * FROM received_emails WHERE id = ? AND ifnull(is_deleted, 0) = 0"
@@ -389,13 +483,25 @@ def register_ui_routes(app):
                     _, parsed_sender = parseaddr(original_email["sender"])
                     form_data["to"] = parsed_sender or ""
                     original_subject = original_email["subject"] or ""
-                    form_data["subject"] = original_subject if original_subject.lower().startswith("re:") else f"Re: {original_subject}"
+                    form_data["subject"] = (
+                        original_subject
+                        if original_subject.lower().startswith("re:")
+                        else f"Re: {original_subject}"
+                    )
                     beijing_tz = ZoneInfo("Asia/Shanghai")
-                    utc_dt = datetime.strptime(original_email["timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                    bjt_str = utc_dt.astimezone(beijing_tz).strftime("%Y-%m-%d %H:%M:%S")
+                    utc_dt = datetime.strptime(
+                        original_email["timestamp"], "%Y-%m-%d %H:%M:%S"
+                    ).replace(tzinfo=timezone.utc)
+                    bjt_str = utc_dt.astimezone(beijing_tz).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
                     body_content = strip_tags_for_preview(original_email["body"] or "")
-                    quoted_text = "\n".join([f"> {line}" for line in body_content.splitlines()])
-                    form_data["body"] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
+                    quoted_text = "\n".join(
+                        [f"> {line}" for line in body_content.splitlines()]
+                    )
+                    form_data["body"] = (
+                        f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
+                    )
                     form_data["html_body"] = ""
                     form_data["editor_mode"] = "text"
                     form_data["attachments"] = []
