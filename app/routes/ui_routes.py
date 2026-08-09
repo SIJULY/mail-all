@@ -340,7 +340,8 @@ def register_ui_routes(app):
                 flash("草稿已保存", "success")
                 return redirect(url_for("view_drafts"))
 
-            if not smtp_cfg["password"] or not smtp_cfg["default_sender"]:
+            sending_enabled = bool((smtp_cfg.get("password") or smtp_cfg.get("resend_token")) and smtp_cfg.get("default_sender"))
+            if not sending_enabled:
                 flash("发件功能未配置。请先在后台左侧的发信设置中完成 SMTP / API Key 配置。", "error")
             elif not to_address or not subject:
                 flash("收件人和主题不能为空！", "error")

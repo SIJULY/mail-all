@@ -132,8 +132,8 @@ def register_admin_routes(app):
             elif action == "delete":
                 deleted_count = delete_user(request.form.get("user_id"))
                 flash("用户已删除" if deleted_count else "用户不存在或不允许删除", "success" if deleted_count else "error")
-            return redirect(url_for("admin_view", show_user_modal=1))
-        return redirect(url_for("admin_view", show_user_modal=1))
+            return redirect(url_for("admin_users"))
+        return redirect(url_for("admin_users"))
 
     @app.route("/restore_email/<int:email_id>", methods=["POST"])
     @login_required
@@ -455,7 +455,7 @@ def register_admin_routes(app):
         except Exception as e:
             app.logger.error(f"管理域名失败: {e}")
             flash(f"操作失败: {e}", "error")
-        return redirect(url_for("admin_view", show_domain_modal=1))
+        return redirect(url_for("admin_domains"))
 
     @app.route("/manage_smtp_settings", methods=["POST"])
     @login_required
@@ -515,10 +515,12 @@ def register_admin_routes(app):
     @admin_required
     def send_test_smtp_email():
         test_recipient = normalize_email_address(request.form.get("test_recipient", ""))
-        if not test_recipient or "@" not in test_recipient:
-            flash("测试收件人邮箱格式不正确", "error")
-            return redirect(url_for("admin_smtp"))
         cfg = get_smtp_config()
+        if not test_recipient:
+            test_recipient = cfg.get("default_sender")
+        if not test_recipient or "@" not in test_recipient:
+            flash("无法获取测试收件人(请检查默认发件邮箱)", "error")
+            return redirect(url_for("admin_smtp"))
         if (not cfg.get("password") and not cfg.get("resend_token")) or not cfg.get("default_sender"):
             flash("请先完成发信配置后再发送测试邮件", "error")
             return redirect(url_for("admin_smtp"))
