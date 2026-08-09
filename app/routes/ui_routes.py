@@ -507,7 +507,7 @@ def register_ui_routes(app):
                         "%Y-%m-%d %H:%M:%S"
                     )
                     original_body = original_email["body"] or ""
-                    original_body_type = original_email.get("body_type") or "text"
+                    original_body_type = dict(original_email).get("body_type") or "text"
                     
                     body_content_text = strip_tags_for_preview(original_body)
                     quoted_text = "\n".join(
