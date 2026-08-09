@@ -287,6 +287,7 @@ gunicorn>=21,<24
 aiosmtpd>=1.4.4,<2.0
 Werkzeug>=3.0,<4.0
 MarkupSafe>=2.1,<4.0
+requests>=2.25.0
 backports.zoneinfo>=0.2.1; python_version < "3.9"
 EOF
   fi
