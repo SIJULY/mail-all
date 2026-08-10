@@ -27,6 +27,23 @@ def register_ui_routes(app):
     def logout():
         return logout_view()
 
+    @app.route("/api/mark_read/<int:email_id>", methods=["POST"])
+    @login_required
+    def mark_email_read(email_id):
+        from app.repositories.db import get_db_conn
+        conn = get_db_conn()
+        try:
+            if session.get("is_admin"):
+                conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ?", (email_id,))
+            else:
+                conn.execute("UPDATE received_emails SET is_read = 1 WHERE id = ? AND recipient = ?", (email_id, session["user_email"]))
+            conn.commit()
+            return jsonify({"status": "success"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+        finally:
+            conn.close()
+
     @app.route("/api/unread_count")
     @login_required
     def unread_count():
