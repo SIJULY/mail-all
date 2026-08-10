@@ -491,16 +491,30 @@ def register_admin_routes(app):
                 set_app_setting("smtp_username", smtp_username)
                 if smtp_password.strip():
                     set_app_setting("smtp_password", smtp_password)
-                
+
                 set_app_setting("resend_token", "") # Clear it to ensure SMTP is used
 
             set_app_setting("default_sender", default_sender)
             set_app_setting("send_mode", send_mode)
             
+            auto_refresh_interval = (request.form.get("auto_refresh_interval") or "0").strip()
+            set_app_setting("auto_refresh_interval", auto_refresh_interval)
+
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                from flask import jsonify
+                return jsonify({"status": "success", "message": "设置已保存"})
+
             flash("发信配置已保存并立即生效", "success")
         except Exception as e:
             app.logger.error(f"保存发信配置失败: {e}")
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                from flask import jsonify
+                return jsonify({"status": "error", "message": f"保存失败: {e}"})
             flash(f"保存发信配置失败: {e}", "error")
+            
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            from flask import jsonify
+            return jsonify({"status": "error", "message": "未知错误"})
         return redirect(url_for("admin_system"))
 
     @app.route("/send_test_smtp_email", methods=["POST"])
