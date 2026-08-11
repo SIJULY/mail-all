@@ -53,13 +53,14 @@ def extract_code_from_body(body_text):
         "激活码",
         "登录码",
         "登入碼",
+        "安全代码",
     ]
     has_code_keyword = any(keyword in body_lower for keyword in code_keywords)
 
     if has_code_keyword:
         semantic_patterns = [
-            r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp)[^\d]{0,30}(\d{4,8})",
-            r"(?:code|验证码|驗證碼|検証コード|otp)[^\d]{0,12}(\d{4,8})",
+            r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp|security\s+code|安全代码|一次性代码|一次性密碼|一次性密码|one-time\s+code|one\s+time\s+code|one-time\s+password)[^\d]{0,30}(\d{4,8})",
+            r"(?:code|验证码|驗證碼|検証コード|otp|授权码|校验码|确认码|激活码|登录码|登入碼|代码)[^\d]{0,12}(\d{4,8})",
         ]
         for pat in semantic_patterns:
             m = re.search(pat, body_text, re.IGNORECASE)
@@ -68,9 +69,12 @@ def extract_code_from_body(body_text):
                 if not _is_likely_year_token(code):
                     return code
 
-        m = re.search(r"(?<!\d)(\d{6})(?!\d)", body_text)
+        # fallback: find 6 digits not surrounded by letters or digits (to prevent matching UUIDs like 5c896924)
+        m = re.search(r"(?<![a-zA-Z0-9])(\d{6})(?![a-zA-Z0-9])", body_text)
         if m:
-            return m.group(1)
+            code = m.group(1)
+            if not _is_likely_year_token(code):
+                return code
 
     return None
 
