@@ -719,10 +719,6 @@ function initLiveSearch() {
         });
 
         var tbody = document.getElementById('inbox-mail-tbody');
-        if (tbody) {
-            tbody.style.opacity = '0.5';
-            tbody.style.pointerEvents = 'none'; // Prevent clicks while loading
-        }
 
         // Cancel previous request if typing quickly (solves race conditions!)
         if (abortController) abortController.abort();
@@ -753,8 +749,6 @@ function initLiveSearch() {
                 var newBody = doc.getElementById('inbox-mail-tbody');
                 if (newBody && currentBody) {
                     currentBody.innerHTML = newBody.innerHTML;
-                    currentBody.style.opacity = '1';
-                    currentBody.style.pointerEvents = 'auto';
                 }
                 
                 var currentPagination = document.querySelector('.pagination');
@@ -769,10 +763,6 @@ function initLiveSearch() {
             }).catch(function(err) {
                 if (err.name === 'AbortError') return; // Expected when typing fast
                 console.error('Search fetch error:', err);
-                if (tbody) {
-                    tbody.style.opacity = '1';
-                    tbody.style.pointerEvents = 'auto';
-                }
             });
         }, 200); // 200ms debounce feels very fast but saves network
     });
