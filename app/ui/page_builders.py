@@ -698,12 +698,8 @@ function initLiveSearch() {
     var abortController = null;
     var timeoutId = null;
 
-    searchForm.addEventListener('submit', function(e){
-        e.preventDefault();
-    });
-
-    searchInput.addEventListener('input', function() {
-        var query = this.value.trim();
+    function performSearch() {
+        var query = searchInput.value.trim();
         
         // Disable background refresh to prevent DOM jumps while searching
         window.__isSearching = (query.length > 0);
@@ -718,8 +714,6 @@ function initLiveSearch() {
             row.style.display = matches ? '' : 'none';
         });
 
-        var tbody = document.getElementById('inbox-mail-tbody');
-
         // Cancel previous request if typing quickly (solves race conditions!)
         if (abortController) abortController.abort();
         abortController = new AbortController();
@@ -727,46 +721,60 @@ function initLiveSearch() {
         // 2. Debounced server fetch
         clearTimeout(timeoutId);
         timeoutId = setTimeout(function() {
-            var url = new URL(searchForm.action || window.location.href);
-            var formData = new FormData(searchForm);
-            for(var pair of formData.entries()) {
-                if(pair[1]) url.searchParams.set(pair[0], pair[1]);
-                else url.searchParams.delete(pair[0]);
-            }
-            url.searchParams.delete('page');
+            try {
+                var actionUrl = searchForm.getAttribute('action') || window.location.href;
+                var url = new URL(actionUrl, window.location.origin);
+                var formData = new FormData(searchForm);
+                for(var pair of formData.entries()) {
+                    if(pair[1]) url.searchParams.set(pair[0], pair[1]);
+                    else url.searchParams.delete(pair[0]);
+                }
+                url.searchParams.delete('page');
 
-            fetch(url.toString(), {
-                signal: abortController.signal,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Cache-Control': 'no-cache'
-                }
-            }).then(function(resp) { return resp.text(); }).then(function(html) {
-                var parser = new DOMParser();
-                var doc = parser.parseFromString(html, 'text/html');
-                
-                var currentBody = document.getElementById('inbox-mail-tbody');
-                var newBody = doc.getElementById('inbox-mail-tbody');
-                if (newBody && currentBody) {
-                    currentBody.innerHTML = newBody.innerHTML;
-                }
-                
-                var currentPagination = document.querySelector('.pagination');
-                var newPagination = doc.querySelector('.pagination');
-                if (currentPagination && newPagination) currentPagination.innerHTML = newPagination.innerHTML;
-                
-                var currentTitlePagination = document.querySelector('.title-pagination');
-                var newTitlePagination = doc.querySelector('.title-pagination');
-                if (currentTitlePagination && newTitlePagination) currentTitlePagination.innerHTML = newTitlePagination.innerHTML;
-                
-                window.history.replaceState({}, '', url.toString());
-            }).catch(function(err) {
-                if (err.name === 'AbortError') return; // Expected when typing fast
-                console.error('Search fetch error:', err);
-            });
+                fetch(url.toString(), {
+                    signal: abortController.signal,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Cache-Control': 'no-cache'
+                    }
+                }).then(function(resp) { return resp.text(); }).then(function(html) {
+                    var parser = new DOMParser();
+                    var doc = parser.parseFromString(html, 'text/html');
+                    
+                    var currentBody = document.getElementById('inbox-mail-tbody');
+                    var newBody = doc.getElementById('inbox-mail-tbody');
+                    if (newBody && currentBody) {
+                        currentBody.innerHTML = newBody.innerHTML;
+                    }
+                    
+                    var currentPagination = document.querySelector('.pagination');
+                    var newPagination = doc.querySelector('.pagination');
+                    if (currentPagination && newPagination) currentPagination.innerHTML = newPagination.innerHTML;
+                    
+                    var currentTitlePagination = document.querySelector('.title-pagination');
+                    var newTitlePagination = doc.querySelector('.title-pagination');
+                    if (currentTitlePagination && newTitlePagination) currentTitlePagination.innerHTML = newTitlePagination.innerHTML;
+                    
+                    window.history.replaceState({}, '', url.toString());
+                }).catch(function(err) {
+                    if (err.name === 'AbortError') return; // Expected when typing fast
+                    console.error('Search fetch error:', err);
+                });
+            } catch (err) {
+                console.error('Search URL error:', err);
+            }
         }, 200); // 200ms debounce feels very fast but saves network
+    }
+
+    searchForm.addEventListener('submit', function(e){
+        e.preventDefault();
+        performSearch();
     });
-}} document.addEventListener('DOMContentLoaded',function(){initLiveSearch();const flashMessages=document.querySelectorAll('.flash-success, .flash-error');flashMessages.forEach(function(message){setTimeout(function(){message.style.opacity='0';setTimeout(function(){ message.style.display='none'; },500);},5000);});var autoRefreshSeconds = parseInt('{{ system_modal_data.auto_refresh_interval if system_modal_data else 0 }}') || 0;if({{ 'true' if nav_mode == 'inbox' and not selected_email and not compose_mode else 'false' }} && autoRefreshSeconds > 0){setTimeout(autoRefreshInbox, 2000);setInterval(autoRefreshInbox, autoRefreshSeconds * 1000);document.addEventListener('visibilitychange',function(){if(!document.hidden){setTimeout(autoRefreshInbox,800);}});}});</script></body></html>
+
+    searchInput.addEventListener('input', function() {
+        performSearch();
+    });
+} document.addEventListener('DOMContentLoaded',function(){initLiveSearch();const flashMessages=document.querySelectorAll('.flash-success, .flash-error');flashMessages.forEach(function(message){setTimeout(function(){message.style.opacity='0';setTimeout(function(){ message.style.display='none'; },500);},5000);});var autoRefreshSeconds = parseInt('{{ system_modal_data.auto_refresh_interval if system_modal_data else 0 }}') || 0;if({{ 'true' if nav_mode == 'inbox' and not selected_email and not compose_mode else 'false' }} && autoRefreshSeconds > 0){setTimeout(autoRefreshInbox, 2000);setInterval(autoRefreshInbox, autoRefreshSeconds * 1000);document.addEventListener('visibilitychange',function(){if(!document.hidden){setTimeout(autoRefreshInbox,800);}});}});</script></body></html>
         """,
         title=title_text,
         mails=processed_emails,
