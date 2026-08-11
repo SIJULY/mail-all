@@ -128,40 +128,59 @@ def build_mail_query_context(is_admin_view, recipient_override=None, nav_mode="i
             where_clauses.append("(subject LIKE ? OR sender LIKE ? OR body LIKE ?)")
             params.extend([f"%{search_query}%"] * 3)
 
+    # 除验证码外的过滤条件都能下推到 SQL，避免把整表读进内存再筛
+    if filter_type == "read":
+        where_clauses.append("ifnull(is_read, 0) = 1")
+    elif filter_type == "unread":
+        where_clauses.append("ifnull(is_read, 0) = 0")
+    elif filter_type == "starred":
+        where_clauses.append("ifnull(is_starred, 0) = 1")
+    elif filter_type == "important":
+        where_clauses.append("ifnull(is_important, 0) = 1")
+
     where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-    all_rows = conn.execute(
-        f"SELECT * FROM received_emails {where_sql} ORDER BY id DESC",
-        params,
-    ).fetchall()
 
-    filtered_rows = []
-    for row in all_rows:
-        if filter_type == "read" and not row["is_read"]:
-            continue
-        if filter_type == "unread" and row["is_read"]:
-            continue
-        if filter_type == "code":
+    if filter_type == "code":
+        # 判断是否验证码邮件必须解析正文，只能在 Python 侧过滤；
+        # 但这里只取判断所需的列，不再 SELECT * 把全部正文拉进来
+        candidate_rows = conn.execute(
+            f"SELECT id, subject, body, body_type FROM received_emails {where_sql} ORDER BY id DESC",
+            params,
+        ).fetchall()
+        filtered_ids = []
+        for row in candidate_rows:
             preview_text = strip_tags_for_preview(row["body"] or "") if row["body_type"] and "html" in row["body_type"] else (row["body"] or "")
-            combined_text = f"{row['subject'] or ''}\n{preview_text}"
-            if not extract_code_from_body(combined_text):
-                continue
-        if filter_type == "starred" and not row["is_starred"]:
-            continue
-        if filter_type == "important" and not row["is_important"]:
-            continue
-        filtered_rows.append(row)
+            if extract_code_from_body(f"{row['subject'] or ''}\n{preview_text}"):
+                filtered_ids.append(row["id"])
+    else:
+        filtered_ids = [
+            row["id"]
+            for row in conn.execute(
+                f"SELECT id FROM received_emails {where_sql} ORDER BY id DESC",
+                params,
+            ).fetchall()
+        ]
 
-    filtered_ids = [row["id"] for row in filtered_rows]
-    total_emails = len(filtered_rows)
+    total_emails = len(filtered_ids)
     total_pages = math.ceil(total_emails / per_page) if total_emails > 0 else 1
     if page > total_pages:
         page = total_pages
     offset = (page - 1) * per_page
-    emails_data = filtered_rows[offset: offset + per_page]
-    page_email_ids = [row["id"] for row in emails_data]
+    page_email_ids = filtered_ids[offset: offset + per_page]
+
+    # 只有当前页这几十封才需要完整行（含正文）
+    emails_data = []
     attachment_counts = {}
     if page_email_ids:
         placeholders = ",".join("?" for _ in page_email_ids)
+        rows_by_id = {
+            row["id"]: row
+            for row in conn.execute(
+                f"SELECT * FROM received_emails WHERE id IN ({placeholders})",
+                page_email_ids,
+            ).fetchall()
+        }
+        emails_data = [rows_by_id[email_id] for email_id in page_email_ids if email_id in rows_by_id]
         attachment_rows = conn.execute(
             f"SELECT email_id, COUNT(*) AS cnt FROM received_email_attachments WHERE email_id IN ({placeholders}) GROUP BY email_id",
             page_email_ids,

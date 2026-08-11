@@ -710,15 +710,15 @@ function initLiveSearch() {
 
     var abortController = null;
     var timeoutId = null;
+    var requestSeq = 0; // 只认最后一次请求的结果，避免慢响应覆盖新结果
 
     function performSearch() {
         var query = searchInput.value.trim();
-        
-        // Disable background refresh to prevent DOM jumps while searching
-        window.__isSearching = (query.length > 0);
+
+        // 输入期间一律暂停后台刷新：清空搜索框的瞬间也不能让自动刷新插进来重绘
+        window.__isSearching = true;
 
         var currentBody = document.getElementById('inbox-mail-tbody');
-        var listCard = document.querySelector('.mail-list-card');
 
         // 1. Zero-latency client-side filter
         var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -735,15 +735,14 @@ function initLiveSearch() {
         // Cancel previous request if typing quickly (solves race conditions!)
         if (abortController) abortController.abort();
         abortController = new AbortController();
+        var mySeq = ++requestSeq;
+        var myController = abortController;
 
         // 2. Debounced server fetch
         clearTimeout(timeoutId);
         timeoutId = setTimeout(function() {
-            if (listCard) {
-                listCard.style.transition = 'opacity 0.2s ease';
-                listCard.style.opacity = '0.5';
-                listCard.style.pointerEvents = 'none';
-            }
+            // 不再把列表整体调暗：本地过滤已经给出即时反馈，
+            // 半透明 + pointer-events:none 反而造成闪烁和点不动的卡顿感
             try {
                 var actionUrl = searchForm.getAttribute('action') || window.location.href;
                 var url = new URL(actionUrl, window.location.origin);
@@ -755,12 +754,17 @@ function initLiveSearch() {
                 url.searchParams.delete('page');
 
                 fetch(url.toString(), {
-                    signal: abortController.signal,
+                    signal: myController.signal,
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest',
                         'Cache-Control': 'no-cache'
                     }
                 }).then(function(resp) { return resp.text(); }).then(function(html) {
+                    // 期间又敲了新的字，这次结果已过期，丢弃
+                    if (mySeq !== requestSeq) return;
+                    // 输入框内容在请求途中变了，同样以最新一次为准
+                    if (searchInput.value.trim() !== query) return;
+
                     var parser = new DOMParser();
                     var doc = parser.parseFromString(html, 'text/html');
                     
@@ -786,19 +790,16 @@ function initLiveSearch() {
                     if (err.name === 'AbortError') return; // Expected when typing fast
                     console.error('Search fetch error:', err);
                 }).finally(function() {
-                    if (!abortController.signal.aborted && listCard) {
-                        listCard.style.opacity = '1';
-                        listCard.style.pointerEvents = 'auto';
+                    // 只有最后一次请求收尾时才恢复后台刷新
+                    if (mySeq === requestSeq) {
+                        window.__isSearching = (searchInput.value.trim().length > 0);
                     }
                 });
             } catch (err) {
                 console.error('Search URL error:', err);
-                if (listCard) {
-                    listCard.style.opacity = '1';
-                    listCard.style.pointerEvents = 'auto';
-                }
+                window.__isSearching = false;
             }
-        }, 200); // 200ms debounce feels very fast but saves network
+        }, 300); // 300ms 防抖：低于此值在慢网络下几乎每个字都发一次请求
     }
 
     searchForm.addEventListener('submit', function(e){
