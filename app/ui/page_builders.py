@@ -704,15 +704,20 @@ function initLiveSearch() {
         // Disable background refresh to prevent DOM jumps while searching
         window.__isSearching = (query.length > 0);
 
+        var currentBody = document.getElementById('inbox-mail-tbody');
+        var listCard = document.querySelector('.mail-list-card');
+
         // 1. Zero-latency client-side filter
         var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-        var rows = document.querySelectorAll('#inbox-mail-tbody tr');
-        rows.forEach(function(row) {
-            if (row.querySelector('.empty-row')) return;
-            var text = row.textContent.toLowerCase();
-            var matches = terms.every(function(term) { return text.includes(term); });
-            row.style.display = matches ? '' : 'none';
-        });
+        if (currentBody) {
+            var rows = currentBody.querySelectorAll('tr');
+            rows.forEach(function(row) {
+                if (row.querySelector('.empty-row')) return;
+                var text = row.textContent.toLowerCase();
+                var matches = terms.every(function(term) { return text.includes(term); });
+                row.style.display = matches ? '' : 'none';
+            });
+        }
 
         // Cancel previous request if typing quickly (solves race conditions!)
         if (abortController) abortController.abort();
@@ -721,6 +726,11 @@ function initLiveSearch() {
         // 2. Debounced server fetch
         clearTimeout(timeoutId);
         timeoutId = setTimeout(function() {
+            if (listCard) {
+                listCard.style.transition = 'opacity 0.2s ease';
+                listCard.style.opacity = '0.5';
+                listCard.style.pointerEvents = 'none';
+            }
             try {
                 var actionUrl = searchForm.getAttribute('action') || window.location.href;
                 var url = new URL(actionUrl, window.location.origin);
@@ -741,7 +751,6 @@ function initLiveSearch() {
                     var parser = new DOMParser();
                     var doc = parser.parseFromString(html, 'text/html');
                     
-                    var currentBody = document.getElementById('inbox-mail-tbody');
                     var newBody = doc.getElementById('inbox-mail-tbody');
                     if (newBody && currentBody) {
                         currentBody.innerHTML = newBody.innerHTML;
@@ -755,13 +764,26 @@ function initLiveSearch() {
                     var newTitlePagination = doc.querySelector('.title-pagination');
                     if (currentTitlePagination && newTitlePagination) currentTitlePagination.innerHTML = newTitlePagination.innerHTML;
                     
+                    var currentTitle = document.querySelector('.mail-title');
+                    var newTitle = doc.querySelector('.mail-title');
+                    if (currentTitle && newTitle) currentTitle.innerHTML = newTitle.innerHTML;
+                    
                     window.history.replaceState({}, '', url.toString());
                 }).catch(function(err) {
                     if (err.name === 'AbortError') return; // Expected when typing fast
                     console.error('Search fetch error:', err);
+                }).finally(function() {
+                    if (!abortController.signal.aborted && listCard) {
+                        listCard.style.opacity = '1';
+                        listCard.style.pointerEvents = 'auto';
+                    }
                 });
             } catch (err) {
                 console.error('Search URL error:', err);
+                if (listCard) {
+                    listCard.style.opacity = '1';
+                    listCard.style.pointerEvents = 'auto';
+                }
             }
         }, 200); // 200ms debounce feels very fast but saves network
     }
