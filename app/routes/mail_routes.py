@@ -8,8 +8,9 @@ from datetime import timedelta
 from flask import Response, jsonify, redirect, request, session, url_for
 from markupsafe import escape
 
-from app.config import SPECIAL_VIEW_TOKEN
+from app.config import ADMIN_USERNAME, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
+from app.repositories.settings_repo import get_app_setting
 from app.services.view_service import build_mail_query_context, build_page_url, get_email_detail_for_inline
 from app.ui.page_builders import render_email_list_page
 from app.utils.decorators import login_required
@@ -115,7 +116,6 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
     system_modal_data = None
 
     if is_admin_view:
-        from app.repositories.settings_repo import get_app_setting
         from app.repositories.mail_repo import get_managed_domains
         from app.repositories.auth_repo import get_managed_users
 
@@ -133,8 +133,13 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
             "resend_token": cfg.get("resend_token", "")
         }
         
+        tg_bot_token = get_app_setting("tg_bot_token", "")
         system_modal_data = {
-            "tg_bot_token": get_app_setting("tg_bot_token", ""),
+            "tg_bot_token": tg_bot_token,
+            # 模板只展示脱敏后的尾号，避免把完整 Token 渲染进页面
+            "tg_bot_token_display": (
+                f"…{tg_bot_token[-4:]}" if len(tg_bot_token) > 4 else "已配置"
+            ),
             "tg_chat_id": get_app_setting("tg_chat_id", ""),
             "auto_refresh_interval": int(get_app_setting("auto_refresh_interval", "0") or "0"),
             "tg_sender_format": get_app_setting("tg_sender_format", "name"),
@@ -165,7 +170,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         managed_users=managed_users,
         smtp_modal_data=smtp_modal_data,
         system_modal_data=system_modal_data,
-        ADMIN_USERNAME=get_app_setting("ADMIN_USERNAME", "admin")
+        ADMIN_USERNAME=ADMIN_USERNAME,
     )
 
 
@@ -367,7 +372,7 @@ def register_mail_routes(app):
             attachment_html = '<div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;background:#f8fafc;"><strong>附件：</strong>' + ''.join(links) + '</div>'
         body_content = email["body"] or ""
         if "text/html" in (email["body_type"] or ""):
-            email_display = attachment_html + f'<iframe srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
+            email_display = attachment_html + f'<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" srcdoc="{html.escape(body_content)}" style="width:100%;height:calc(100vh - 20px);border:none;"></iframe>'
         else:
             email_display = attachment_html + f'<pre style="white-space:pre-wrap;word-wrap:break-word;">{escape(body_content)}</pre>'
         return Response(email_display, mimetype="text/html; charset=utf-8")

@@ -8,6 +8,12 @@ from app.config import DB_FILE
 def get_db_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    # Web 进程与 SMTP 收信进程共享同一个库文件，WAL 可显著降低两者的写锁冲突
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except sqlite3.DatabaseError:
+        pass
     return conn
 
 
@@ -176,5 +182,24 @@ def init_db():
         if "timestamp" not in sent_columns:
             cursor.execute("ALTER TABLE sent_emails ADD COLUMN timestamp DATETIME DEFAULT CURRENT_TIMESTAMP")
             conn.commit()
+
+    # 收件箱/回收站/token 查询几乎都按 recipient + is_deleted 过滤并按时间倒序，
+    # 之前这些列没有任何索引，邮件量上去后全表扫描会明显变慢
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_received_emails_recipient ON received_emails (recipient, is_deleted, id DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_received_emails_deleted_ts ON received_emails (is_deleted, timestamp DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_received_attachments_email_id ON received_email_attachments (email_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_draft_emails_owner ON draft_emails (owner_email)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sent_emails_owner ON sent_emails (owner_email, id DESC)"
+    )
+    conn.commit()
 
     conn.close()
