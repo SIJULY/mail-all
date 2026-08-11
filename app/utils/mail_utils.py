@@ -32,6 +32,10 @@ def extract_code_from_body(body_text):
         "login code",
         "one-time password",
         "otp",
+        "security code",
+        "passcode",
+        "confirmation code",
+        "auth code",
     ]
     has_code_keyword = any(keyword in body_lower for keyword in code_keywords)
 
@@ -47,9 +51,9 @@ def extract_code_from_body(body_text):
                 if not _is_likely_year_token(code):
                     return code
 
-    m = re.search(r"(?<!\d)(\d{6})(?!\d)", body_text)
-    if m:
-        return m.group(1)
+        m = re.search(r"(?<!\d)(\d{6})(?!\d)", body_text)
+        if m:
+            return m.group(1)
 
     return None
 
@@ -63,7 +67,7 @@ def linkify_plain_text(text: str) -> str:
     def replace_match(match):
         display_url = match.group("url")
         trailing = ""
-        while display_url and display_url[-1] in ".,;:!?)\]}":
+        while display_url and display_url[-1] in r".,;:!?)\]}":
             trailing = display_url[-1] + trailing
             display_url = display_url[:-1]
         href = display_url if display_url.lower().startswith(("http://", "https://")) else f"https://{display_url}"
