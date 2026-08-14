@@ -12,6 +12,15 @@ def _is_likely_year_token(value: str) -> bool:
 
 
 
+def _is_likely_hyphenated_alnum_code(value: str) -> bool:
+    value = str(value or "").strip()
+    if not re.fullmatch(r"[A-Z0-9]{2,6}-[A-Z0-9]{2,6}", value, re.IGNORECASE):
+        return False
+    # 避免把纯数字日期/编号片段误识别为验证码，例如 2026-08
+    return bool(re.search(r"[A-Z]", value, re.IGNORECASE))
+
+
+
 def extract_code_from_body(body_text):
     if not body_text:
         return None
@@ -27,6 +36,8 @@ def extract_code_from_body(body_text):
         "your code is",
         "your code:",
         "your code",
+        "code below",
+        "use the code below",
         "code is",
         "code:",
         "chatgpt code",
@@ -59,6 +70,9 @@ def extract_code_from_body(body_text):
 
     if has_code_keyword:
         semantic_patterns = [
+            r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|confirmation\s+code|log-?in\s+code|login\s+code|otp|security\s+code|passcode|auth\s+code|安全代码|一次性代码|一次性密碼|一次性密码|one-time\s+code|one\s+time\s+code|one-time\s+password)[^A-Z0-9]{0,40}([A-Z0-9]{2,6}-[A-Z0-9]{2,6})",
+            r"(?:use\s+the\s+code\s+below|code\s+below)[\s\S]{0,120}?([A-Z0-9]{2,6}-[A-Z0-9]{2,6})",
+            r"(?:code|验证码|驗證碼|検証コード|otp|授权码|校验码|确认码|激活码|登录码|登入碼|代码)[^A-Z0-9]{0,20}([A-Z0-9]{2,6}-[A-Z0-9]{2,6})",
             r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp|security\s+code|安全代码|一次性代码|一次性密碼|一次性密码|one-time\s+code|one\s+time\s+code|one-time\s+password)[^\d]{0,30}(\d{4,8})",
             r"(?:code|验证码|驗證碼|検証コード|otp|授权码|校验码|确认码|激活码|登录码|登入碼|代码)[^\d]{0,12}(\d{4,8})",
         ]
@@ -66,8 +80,18 @@ def extract_code_from_body(body_text):
             m = re.search(pat, body_text, re.IGNORECASE)
             if m:
                 code = m.group(1)
+                if "-" in code and _is_likely_hyphenated_alnum_code(code):
+                    return code.upper()
                 if not _is_likely_year_token(code):
                     return code
+
+        # fallback: support verification codes like 8QU-J6E / AB12-CD34 when the
+        # email contains a code keyword but the exact wording is not covered above.
+        m = re.search(r"(?<![A-Z0-9])([A-Z0-9]{2,6}-[A-Z0-9]{2,6})(?![A-Z0-9])", body_text, re.IGNORECASE)
+        if m:
+            code = m.group(1)
+            if _is_likely_hyphenated_alnum_code(code):
+                return code.upper()
 
         # fallback: find 6 digits not surrounded by letters or digits (to prevent matching UUIDs like 5c896924)
         m = re.search(r"(?<![a-zA-Z0-9])(\d{6})(?![a-zA-Z0-9])", body_text)
