@@ -185,8 +185,25 @@ def register_mail_routes(app):
         if not recipient_mail:
             return jsonify({"error": "mail parameter is missing"}), 400
 
-        old_keywords = ["verify your email address", "验证您的电子邮件地址", "e メールアドレスを検証してください", "verification code"]
-        new_keywords = ["chatgpt", "openai"]
+        old_keywords = [
+            "verify your email address",
+            "验证您的电子邮件地址",
+            "e メールアドレスを検証してください",
+            "verification code",
+            "confirmation code",
+            "spacexai confirmation code",
+        ]
+        new_keywords = [
+            "chatgpt",
+            "openai",
+            "x.ai",
+            "spacexai",
+            "validate your email",
+            "validate your email address",
+            "creating a spacexai account",
+            "please use the code below",
+            "use the code below",
+        ]
         conn = get_db_conn()
         try:
             mail_variants = build_mail_search_variants(recipient_mail)
@@ -281,7 +298,23 @@ def register_mail_routes(app):
                 combined_text = f"{subject}\n{preview_text}"
                 combined_text_lower = combined_text.lower()
                 looks_like_openai = (
-                    "openai" in sender or "chatgpt" in combined_text_lower or "verification code" in combined_text_lower or "temporary verification code" in combined_text_lower or "log-in code" in combined_text_lower or "login code" in combined_text_lower or "your code is" in combined_text_lower
+                    "openai" in sender
+                    or "x.ai" in sender
+                    or "spacexai" in sender
+                    or "chatgpt" in combined_text_lower
+                    or "spacexai" in combined_text_lower
+                    or "x.ai" in combined_text_lower
+                    or "verification code" in combined_text_lower
+                    or "temporary verification code" in combined_text_lower
+                    or "confirmation code" in combined_text_lower
+                    or "validate your email" in combined_text_lower
+                    or "validate your email address" in combined_text_lower
+                    or "creating a spacexai account" in combined_text_lower
+                    or "please use the code below" in combined_text_lower
+                    or "use the code below" in combined_text_lower
+                    or "log-in code" in combined_text_lower
+                    or "login code" in combined_text_lower
+                    or "your code is" in combined_text_lower
                 )
                 if not looks_like_openai:
                     continue
