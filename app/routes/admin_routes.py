@@ -1,6 +1,7 @@
 """后台管理路由模块。"""
 
 import html
+import secrets
 import requests
 
 from flask import flash, redirect, request, send_file, session, url_for
@@ -448,6 +449,23 @@ def register_admin_routes(app):
         except Exception as e:
             app.logger.error(f"管理域名失败: {e}")
             flash(f"操作失败: {e}", "error")
+        return redirect(url_for("admin_domains"))
+
+    @app.route("/manage_mail_api", methods=["POST"])
+    @login_required
+    @admin_required
+    def manage_mail_api():
+        action = (request.form.get("action") or "generate").strip()
+        if action == "generate":
+            set_app_setting("mail_api_key", secrets.token_urlsafe(32))
+            set_app_setting("mail_api_enabled", "1")
+            flash("邮箱生成 API 密钥已生成；旧密钥立即失效", "success")
+        elif action == "toggle":
+            enabled = request.form.get("enabled") in ("1", "on", "true")
+            set_app_setting("mail_api_enabled", "1" if enabled else "0")
+            flash("邮箱生成 API 已启用" if enabled else "邮箱生成 API 已停用", "success")
+        else:
+            flash("未知操作", "error")
         return redirect(url_for("admin_domains"))
 
     @app.route("/manage_smtp_settings", methods=["POST"])

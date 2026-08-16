@@ -114,6 +114,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
     managed_users = None
     smtp_modal_data = None
     system_modal_data = None
+    mail_api_data = None
 
     if is_admin_view:
         from app.repositories.mail_repo import get_managed_domains
@@ -146,6 +147,12 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
             "tg_recipient_format": get_app_setting("tg_recipient_format", "show"),
             "tg_enabled": get_app_setting("tg_enabled", "1")
         }
+        mail_api_data = {
+            "key": get_app_setting("mail_api_key", ""),
+            "enabled": get_app_setting("mail_api_enabled", "1") == "1",
+            "generate_path": "/api/mailbox/generate",
+            "mail_template": f"/Mail?token={SPECIAL_VIEW_TOKEN}&mail={{mail}}",
+        }
 
     return render_email_list_page(
         context["emails_data"],
@@ -170,6 +177,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         managed_users=managed_users,
         smtp_modal_data=smtp_modal_data,
         system_modal_data=system_modal_data,
+        mail_api_data=mail_api_data,
         ADMIN_USERNAME=ADMIN_USERNAME,
     )
 

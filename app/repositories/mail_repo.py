@@ -4,7 +4,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from app.repositories.db import get_db_conn
-from app.utils.mail_utils import generate_subdomain_label, normalize_domain, normalize_email_address
+from app.utils.mail_utils import generate_local_part, generate_subdomain_label, normalize_domain, normalize_email_address
 
 
 PLUS_ALIAS_SUPPORTED_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com"}
@@ -164,6 +164,69 @@ def materialize_domain_for_mailbox(domain_row: sqlite3.Row) -> str:
     if domain_row["is_wildcard"]:
         return f"{generate_subdomain_label(3, 5)}.{base_domain}"
     return base_domain
+
+
+def create_rotating_random_mailbox() -> Dict[str, Any]:
+    """Create a random mailbox while advancing the active-domain cursor atomically."""
+    conn = get_db_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        domains = conn.execute(
+            "SELECT * FROM managed_domains WHERE is_active = 1 ORDER BY id ASC"
+        ).fetchall()
+        if not domains:
+            raise ValueError("没有可用域名，请先在管理域名页面启用至少一个域名")
+
+        cursor_row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'mail_api_domain_cursor'"
+        ).fetchone()
+        try:
+            cursor = int(cursor_row["value"]) if cursor_row else 0
+        except (TypeError, ValueError):
+            cursor = 0
+
+        selected_domain = domains[cursor % len(domains)]
+        domain = materialize_domain_for_mailbox(selected_domain)
+        mailbox_row = None
+        for _ in range(10):
+            local_part = generate_local_part(12)
+            email = f"{local_part}@{domain}"
+            try:
+                conn.execute(
+                    "INSERT INTO managed_mailboxes (email, local_part, domain, source, is_active) VALUES (?, ?, ?, 'mail_api', 1)",
+                    (email, local_part, domain),
+                )
+                mailbox_row = conn.execute(
+                    "SELECT * FROM managed_mailboxes WHERE email = ?", (email,)
+                ).fetchone()
+                break
+            except sqlite3.IntegrityError:
+                continue
+
+        if mailbox_row is None:
+            raise RuntimeError("随机邮箱生成冲突，请重试")
+
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value) VALUES ('mail_api_domain_cursor', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str((cursor + 1) % len(domains)),),
+        )
+        conn.commit()
+        return {
+            "id": mailbox_row["id"],
+            "email": mailbox_row["email"],
+            "local_part": mailbox_row["local_part"],
+            "domain": mailbox_row["domain"],
+            "base_domain": normalize_domain(selected_domain["domain"]),
+            "is_wildcard": bool(selected_domain["is_wildcard"]),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 

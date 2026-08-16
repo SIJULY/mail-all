@@ -107,3 +107,17 @@ mail/
 - Web 入口与路由组装位于 `app/`
 - SMTP 接收启动入口保留在 `app.py`
 - 推荐使用上方一键安装脚本部署
+
+## 轮询邮箱生成 API
+
+管理员登录后进入“管理域名”，在“邮箱生成 API”区域生成密钥。接口会按 ID 顺序轮询所有已启用域名，并为每次请求创建一个随机邮箱地址。
+
+```bash
+curl -H "X-API-Key: 管理页面生成的密钥" http://服务器IP:2099/api/mailbox/generate
+```
+
+也支持 `POST`、`Authorization: Bearer 密钥` 或查询参数 `?api_key=密钥`。响应中的 `email`（同时兼容字段 `mail`）可替换查信模板中的 `{mail}`：
+
+```text
+http://服务器IP:2099/Mail?token=2088&mail={mail}
+```
