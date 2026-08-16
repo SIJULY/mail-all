@@ -10,7 +10,9 @@ from markupsafe import escape
 
 from app.config import ADMIN_USERNAME, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
+from app.repositories.mail_repo import create_rotating_random_mailbox
 from app.repositories.settings_repo import get_app_setting
+from app.routes.api_routes import get_mail_api_credential, mail_api_authorized
 from app.services.view_service import build_mail_query_context, build_page_url, get_email_detail_for_inline
 from app.ui.page_builders import render_email_list_page
 from app.utils.decorators import login_required
@@ -150,7 +152,6 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         mail_api_data = {
             "key": get_app_setting("mail_api_key", ""),
             "enabled": get_app_setting("mail_api_enabled", "1") == "1",
-            "generate_path": "/api/mailbox/generate",
             "mail_template": f"/Mail?token={SPECIAL_VIEW_TOKEN}&mail={{mail}}",
         }
 
@@ -190,6 +191,30 @@ def register_mail_routes(app):
         recipient_mail = normalize_requested_mail(request.args.get("mail"))
         if not token or token != SPECIAL_VIEW_TOKEN:
             return jsonify({"error": "Invalid token"}), 401
+
+        if get_mail_api_credential():
+            if not mail_api_authorized():
+                return jsonify({"error": "Unauthorized", "message": "API 密钥无效或接口已停用"}), 401
+            try:
+                mailbox = create_rotating_random_mailbox()
+            except ValueError as exc:
+                return jsonify({"error": "No available domain", "message": str(exc)}), 409
+            except Exception:
+                app.logger.exception("/Mail 随机邮箱生成失败")
+                return jsonify({"error": "Mailbox generation failed"}), 500
+
+            mail_url = f"/Mail?token={SPECIAL_VIEW_TOKEN}&mail={mailbox['email']}"
+            return jsonify(
+                {
+                    "id": str(mailbox["id"]),
+                    "email": mailbox["email"],
+                    "mail": mailbox["email"],
+                    "domain": mailbox["domain"],
+                    "base_domain": mailbox["base_domain"],
+                    "mail_url": mail_url,
+                }
+            )
+
         if not recipient_mail:
             return jsonify({"error": "mail parameter is missing"}), 400
 

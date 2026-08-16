@@ -10,7 +10,7 @@ from app.repositories.mail_repo import create_rotating_random_mailbox
 from app.repositories.settings_repo import get_app_setting
 
 
-def _get_mail_api_credential() -> str:
+def get_mail_api_credential() -> str:
     authorization = request.headers.get("Authorization", "").strip()
     bearer_token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
     return (
@@ -21,10 +21,10 @@ def _get_mail_api_credential() -> str:
     )
 
 
-def _mail_api_authorized() -> bool:
+def mail_api_authorized() -> bool:
     configured_key = get_app_setting("mail_api_key", "").strip()
     enabled = get_app_setting("mail_api_enabled", "1") == "1"
-    provided_key = _get_mail_api_credential()
+    provided_key = get_mail_api_credential()
     return bool(enabled and configured_key and provided_key and hmac.compare_digest(configured_key, provided_key))
 
 
@@ -48,7 +48,7 @@ def register_api_routes(app):
     @app.route("/api/mailbox/generate", methods=["GET", "POST"])
     @app.route("/api/random-mailbox", methods=["GET", "POST"])
     def api_generate_random_mailbox():
-        if not _mail_api_authorized():
+        if not mail_api_authorized():
             return jsonify({"error": "Unauthorized", "message": "API 密钥无效或接口已停用"}), 401
         try:
             mailbox = create_rotating_random_mailbox()
@@ -71,6 +71,4 @@ def register_api_routes(app):
         )
 
 
-__all__ = ["register_api_routes"]
-
-# keep file timestamp/content synchronized for import cache stability
+__all__ = ["get_mail_api_credential", "mail_api_authorized", "register_api_routes"]

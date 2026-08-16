@@ -110,13 +110,13 @@ mail/
 
 ## 轮询邮箱生成 API
 
-管理员登录后进入“管理域名”，在“邮箱生成 API”区域生成密钥。接口会按 ID 顺序轮询所有已启用域名，并为每次请求创建一个随机邮箱地址。
+管理员登录后进入“管理域名”，在“邮箱生成 API”区域生成密钥。程序携带该密钥请求查信地址模板时，系统会按 ID 顺序轮询所有已启用域名，并创建一个随机邮箱地址。
 
 ```bash
-curl -H "X-API-Key: 管理页面生成的密钥" http://服务器IP:2099/api/mailbox/generate
+curl -H "X-API-Key: 管理页面生成的密钥" 'http://服务器IP:2099/Mail?token=2088&mail={mail}'
 ```
 
-也支持 `POST`、`Authorization: Bearer 密钥` 或查询参数 `?api_key=密钥`。响应中的 `email`（同时兼容字段 `mail`）可替换查信模板中的 `{mail}`：
+也支持 `Authorization: Bearer 密钥`，或在地址末尾追加 `&api_key=密钥`。生成响应中的 `email`（同时兼容字段 `mail`）可替换 `{mail}`；不携带 API 密钥并传入真实邮箱地址时，仍按原规则查信：
 
 ```text
 http://服务器IP:2099/Mail?token=2088&mail={mail}
