@@ -207,6 +207,7 @@ def process_email_data(to_address, raw_email_data):
     final_sender = None
     icloud_hme_header = msg.get("X-ICLOUD-HME")
     if icloud_hme_header:
+        import re
         match = re.search(r"s=([^;]+)", str(icloud_hme_header))
         if match:
             final_sender = match.group(1)
