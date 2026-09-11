@@ -58,6 +58,7 @@ def extract_body_from_message(message: Message) -> str:
                 except Exception:
                     text = ""
             if content_type == "text/html":
+                import re
                 text = re.sub(r"<[^>]+>", " ", text)
             if text:
                 parts.append(text)
@@ -72,10 +73,12 @@ def extract_body_from_message(message: Message) -> str:
             except Exception:
                 body = str(message.get_payload() or "")
         if "html" in (message.get_content_type() or "").lower():
+            import re
             body = re.sub(r"<[^>]+>", " ", body)
         if body:
             parts.append(body)
 
+    import re
     return re.sub(r"\s+", " ", "\n".join(parts)).strip()
 
 
@@ -125,6 +128,7 @@ def _normalize_recipient_candidates(raw_value) -> List[str]:
         if not value:
             continue
         if value.startswith("[") and value.endswith("]"):
+            import re
             flattened_values.extend(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", value))
         else:
             flattened_values.append(value)
@@ -311,7 +315,6 @@ def process_email_data(to_address, raw_email_data):
             import re
             
             # strip html tags for preview
-            import re
             clean_body = re.sub(r'<[^>]+>', '', body)
             preview = clean_body[:150] + "..." if len(clean_body) > 150 else clean_body
             
