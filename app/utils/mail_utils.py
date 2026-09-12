@@ -16,8 +16,15 @@ def _is_likely_hyphenated_alnum_code(value: str) -> bool:
     value = str(value or "").strip()
     if not re.fullmatch(r"[A-Z0-9]{2,6}-[A-Z0-9]{2,6}", value, re.IGNORECASE):
         return False
-    # 避免把纯数字日期/编号片段误识别为验证码，例如 2026-08
-    return bool(re.search(r"[A-Z]", value, re.IGNORECASE))
+    # 避免匹配到邮箱前缀（比如以字母结尾并可能会跟随 @）
+    # 或者类似 salsa-65 这种
+    
+    # 首先，如果是纯数字日期/编号片段，避免误识别为验证码，例如 2026-08
+    has_alpha = bool(re.search(r"[A-Z]", value, re.IGNORECASE))
+    if not has_alpha:
+        return False
+        
+    return True
 
 
 
@@ -90,7 +97,14 @@ def extract_code_from_body(body_text):
         m = re.search(r"(?<![A-Z0-9])([A-Z0-9]{2,6}-[A-Z0-9]{2,6})(?![A-Z0-9])", body_text, re.IGNORECASE)
         if m:
             code = m.group(1)
-            if _is_likely_hyphenated_alnum_code(code):
+            # Ensure it's not part of an email address (e.g. salsa-65@cloud.com)
+            start_pos = m.start(1)
+            end_pos = m.end(1)
+            is_email_part = False
+            if end_pos < len(body_text) and body_text[end_pos] == '@':
+                is_email_part = True
+                
+            if not is_email_part and _is_likely_hyphenated_alnum_code(code):
                 return code.upper()
 
         # fallback: find 6 digits not surrounded by letters or digits (to prevent matching UUIDs like 5c896924)
