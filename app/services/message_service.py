@@ -135,36 +135,47 @@ def build_webmail_url(recipient: str) -> str:
 
 
 
-def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str) -> str:
-    return (
+def _truncate_telegram_body_for_single_message(body: str, max_chars: int) -> str:
+    body = str(body or "（邮件正文为空）").strip()
+    if len(body) <= max_chars:
+        return body
+
+    truncation_notice = "\n\n……\n（正文已截断，请点击底部完整邮件链接查看）"
+    available = max(0, max_chars - len(truncation_notice))
+    if available <= 0:
+        return truncation_notice.strip()
+
+    truncated = body[:available].rstrip()
+    split_at = truncated.rfind("\n\n")
+    if split_at < available * 0.6:
+        split_at = truncated.rfind("\n")
+    if split_at < available * 0.6:
+        split_at = max(
+            truncated.rfind("。"),
+            truncated.rfind("！"),
+            truncated.rfind("？"),
+            truncated.rfind("."),
+            truncated.rfind("!"),
+            truncated.rfind("?"),
+        )
+    if split_at >= available * 0.6:
+        truncated = truncated[: split_at + 1].rstrip()
+
+    return f"{truncated}{truncation_notice}"
+
+
+
+def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str, max_chars: int = 3900) -> str:
+    header = (
         "📧 收到新邮件\n\n"
         f"收件人: {recipient or ''}\n"
         f"发件人: {sender or ''}\n"
         f"主题: {subject or ''}\n\n"
-        f"{body or '（邮件正文为空）'}\n\n"
-        f"完整邮件: {build_webmail_url(recipient)}"
     )
-
-
-
-def split_telegram_text(text: str, max_chars: int = 3900) -> List[str]:
-    text = str(text or "")
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks: List[str] = []
-    remaining = text
-    while len(remaining) > max_chars:
-        split_at = remaining.rfind("\n\n", 0, max_chars)
-        if split_at < max_chars // 2:
-            split_at = remaining.rfind("\n", 0, max_chars)
-        if split_at < max_chars // 2:
-            split_at = max_chars
-        chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip()
-    if remaining:
-        chunks.append(remaining)
-    return chunks
+    footer = f"\n\n完整邮件: {build_webmail_url(recipient)}"
+    body_max_chars = max(0, int(max_chars or 3900) - len(header) - len(footer))
+    body_text = _truncate_telegram_body_for_single_message(body, body_max_chars)
+    return f"{header}{body_text}{footer}"
 
 
 
@@ -497,16 +508,14 @@ def process_email_data(to_address, raw_email_data):
             telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
             tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body)
             message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
-            for text_chunk in split_telegram_text(tg_text):
-                res = requests.post(
-                    message_url,
-                    json={"chat_id": tg_chat_id, "text": text_chunk, "disable_web_page_preview": True},
-                    timeout=10,
-                )
-                if res.status_code != 200:
-                    import logging
-                    logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
-                    break
+            res = requests.post(
+                message_url,
+                json={"chat_id": tg_chat_id, "text": tg_text, "disable_web_page_preview": True},
+                timeout=10,
+            )
+            if res.status_code != 200:
+                import logging
+                logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
