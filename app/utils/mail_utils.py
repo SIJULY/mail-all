@@ -149,16 +149,38 @@ class _HTMLPreviewParser(HTMLParser):
         "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
     }
     SKIP_TAGS = {"script", "style", "head", "title", "meta", "noscript", "svg", "canvas"}
+    PARAGRAPH_TAGS = {
+        "address", "article", "aside", "blockquote", "div", "dl", "fieldset",
+        "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5",
+        "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
+        "table", "tbody", "tfoot", "thead", "tr", "ul",
+    }
+    CELL_TAGS = {"td", "th"}
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts = []
         self.skip_depth = 0
         self.hidden_depth = 0
+        self.link_stack = []
 
     def _append_newline(self):
         if not self.parts or self.parts[-1] != "\n":
             self.parts.append("\n")
+
+    def _append_blank_line(self):
+        while self.parts and self.parts[-1] == " ":
+            self.parts.pop()
+        if not self.parts:
+            return
+        if len(self.parts) >= 2 and self.parts[-1] == "\n" and self.parts[-2] == "\n":
+            return
+        self._append_newline()
+        self.parts.append("\n")
+
+    def _append_inline_separator(self, separator=" "):
+        if self.parts and self.parts[-1] not in {"\n", " ", "\t"}:
+            self.parts.append(separator)
 
     def _is_hidden(self, attrs):
         attrs_dict = {str(k).lower(): str(v or "").lower() for k, v in attrs}
@@ -193,6 +215,13 @@ class _HTMLPreviewParser(HTMLParser):
         # 图片 alt 文本在邮件通知里经常重复标题或品牌名，直接忽略图片节点。
         if tag == "img":
             return
+        if tag == "a":
+            attrs_dict = {str(k).lower(): str(v or "") for k, v in attrs}
+            self.link_stack.append(attrs_dict.get("href", ""))
+            return
+        if tag in self.CELL_TAGS:
+            self._append_inline_separator(" ")
+            return
         if tag in {"br", "hr"} or tag in self.BLOCK_TAGS:
             self._append_newline()
 
@@ -204,7 +233,20 @@ class _HTMLPreviewParser(HTMLParser):
         if self.hidden_depth:
             self.hidden_depth -= 1
             return
-        if tag in self.BLOCK_TAGS:
+        if tag == "a":
+            href = self.link_stack.pop() if self.link_stack else ""
+            href = str(href or "").strip()
+            if href and not href.lower().startswith(("mailto:", "javascript:")):
+                recent_text = "".join(self.parts[-8:]).strip()
+                if href not in recent_text:
+                    self.parts.append(f" ({href})")
+            return
+        if tag in self.CELL_TAGS:
+            self._append_inline_separator(" ")
+            return
+        if tag in self.PARAGRAPH_TAGS:
+            self._append_blank_line()
+        elif tag in self.BLOCK_TAGS:
             self._append_newline()
 
     def handle_data(self, data):
@@ -213,7 +255,13 @@ class _HTMLPreviewParser(HTMLParser):
         data = str(data or "")
         if not data.strip():
             return
-        self.parts.append(data)
+        normalized = re.sub(r"[\t \f\v\u00a0]+", " ", data)
+        if self.parts and self.parts[-1] not in {"\n", " ", "\t"} and normalized[:1].strip():
+            previous = str(self.parts[-1])[-1:]
+            current = normalized[:1]
+            if previous and current and re.match(r"[\w\u4e00-\u9fff]", previous) and re.match(r"[\w\u4e00-\u9fff]", current):
+                self.parts.append(" ")
+        self.parts.append(normalized)
 
     def get_text(self):
         return "".join(self.parts)

@@ -137,6 +137,7 @@ def build_webmail_url(recipient: str) -> str:
 
 def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str) -> str:
     return (
+        "📧 收到新邮件\n\n"
         f"收件人: {recipient or ''}\n"
         f"发件人: {sender or ''}\n"
         f"主题: {subject or ''}\n\n"
