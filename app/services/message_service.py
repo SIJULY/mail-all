@@ -13,7 +13,7 @@ from app.config import SERVER_PUBLIC_IP
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
-from app.utils.mail_utils import strip_tags_for_preview
+from app.utils.mail_utils import extract_code_from_body, strip_tags_for_preview
 
 
 def serialize_moemail_message(row) -> Dict[str, str]:
@@ -317,7 +317,9 @@ def process_email_data(to_address, raw_email_data):
             # 生成 Telegram 正文预览。
             # HTML 邮件里的 <style>/<script> 内容不能只删除标签，否则 CSS/JS 文本会被推送出去。
             clean_body = strip_tags_for_preview(body) if "html" in (body_type or "").lower() else re.sub(r"\s+", " ", body or "").strip()
-            preview = clean_body[:150] + "..." if len(clean_body) > 150 else clean_body
+            code = extract_code_from_body(f"{subject}\n{clean_body}")
+            preview_limit = 2000
+            preview = clean_body[:preview_limit] + "..." if len(clean_body) > preview_limit else clean_body
             
             tg_text = f"📧 <b>收到新邮件</b>\n\n"
             
@@ -337,7 +339,11 @@ def process_email_data(to_address, raw_email_data):
                 
             tg_text += f"<b>发件人:</b> <code>{html.escape(display_sender)}</code>\n"
             tg_text += f"<b>主题:</b> {html.escape(subject)}\n\n"
+            if code:
+                tg_text += f"<b>验证码:</b> <code>{html.escape(code)}</code>\n\n"
             tg_text += f"{html.escape(preview)}"
+            if len(tg_text) > 3900:
+                tg_text = tg_text[:3897] + "..."
             
             url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
             payload = {
