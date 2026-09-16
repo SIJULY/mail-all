@@ -289,8 +289,9 @@ def strip_forwarded_headers_for_preview(text):
                 continue
             break
         stripped_text = "\n".join(lines[idx:]).strip()
-        if stripped_text:
-            return stripped_text
+        # 如果转发标记后面只有 From/Date/Subject 等转发头、没有真正正文，
+        # 也不能回退返回原文；否则 Telegram 预览会继续显示整段转发头。
+        return stripped_text
 
     return normalized_text.strip()
 

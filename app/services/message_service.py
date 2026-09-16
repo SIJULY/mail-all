@@ -322,6 +322,11 @@ def process_email_data(to_address, raw_email_data):
                 clean_body = re.sub(r"[\t \f\v]+", " ", body or "").strip()
                 clean_body = re.sub(r"\n{3,}", "\n\n", clean_body)
             clean_body = strip_forwarded_headers_for_preview(clean_body)
+            if not clean_body:
+                # 有些客户端转发时，外层正文只包含 Forwarded message/From/Date/Subject，
+                # 真正的验证码正文在后续 MIME part 或嵌套 message/rfc822 中。数据库仍保存
+                # 原始展示正文；Telegram 预览为空时再扫描整封邮件，避免只推送转发头。
+                clean_body = strip_forwarded_headers_for_preview(extract_body_from_message(msg))
             code = extract_code_from_body(f"{subject}\n{clean_body}")
             clean_body = focus_preview_around_code(clean_body, code)
             preview_limit = 2000
