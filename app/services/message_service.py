@@ -13,7 +13,7 @@ from app.config import SERVER_PUBLIC_IP
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
-from app.utils.mail_utils import extract_code_from_body, strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
+from app.utils.mail_utils import extract_code_from_body, focus_preview_around_code, strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
 
 
 def serialize_moemail_message(row) -> Dict[str, str]:
@@ -323,6 +323,7 @@ def process_email_data(to_address, raw_email_data):
                 clean_body = re.sub(r"\n{3,}", "\n\n", clean_body)
             clean_body = strip_forwarded_headers_for_preview(clean_body)
             code = extract_code_from_body(f"{subject}\n{clean_body}")
+            clean_body = focus_preview_around_code(clean_body, code)
             preview_limit = 2000
             preview = clean_body[:preview_limit] + "..." if len(clean_body) > preview_limit else clean_body
             

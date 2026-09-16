@@ -244,7 +244,24 @@ def strip_forwarded_headers_for_preview(text):
     if not text:
         return ""
 
-    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    normalized_text = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    forwarded_marker = re.compile(r"-{2,}\s*Forwarded message\s*-{2,}", re.I)
+
+    marker_match = forwarded_marker.search(normalized_text)
+    # 只剥离出现在预览开头附近的转发头，避免误删正文里正常引用的内容。
+    if marker_match and marker_match.start() <= 200:
+        normalized_text = normalized_text[marker_match.start():]
+
+    # HTML 清理后偶尔会把转发标记和 From/Date/Subject 挤在同一行，先补回换行。
+    normalized_text = forwarded_marker.sub("--- Forwarded message ---\n", normalized_text, count=1)
+    normalized_text = re.sub(
+        r"\s+(?=(?:From|To|Cc|Date|Subject|Reply-To|发件人|收件人|日期|时间|主题)\s*:)",
+        "\n",
+        normalized_text,
+        flags=re.I,
+    )
+
+    lines = normalized_text.split("\n")
     start = 0
     while start < len(lines) and not lines[start].strip():
         start += 1
@@ -265,7 +282,54 @@ def strip_forwarded_headers_for_preview(text):
         if stripped_text:
             return stripped_text
 
-    return str(text).strip()
+    return normalized_text.strip()
+
+
+def focus_preview_around_code(text, code=None, context_chars=900):
+    """验证码邮件通知优先展示验证码附近内容，避免被转发头/品牌头图/说明文本挤掉。"""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+
+    keyword_pattern = re.compile(
+        r"验证码|驗證碼|验证代码|verification code|authentication code|security code|one[- ]time (?:code|password)|otp",
+        re.I,
+    )
+    code = str(code or "").strip()
+    if code:
+        index = text.find(code)
+        if index >= 0:
+            prefix = text[:index]
+            keyword_matches = list(keyword_pattern.finditer(prefix))
+            if keyword_matches:
+                keyword_start = keyword_matches[-1].start()
+                # 从关键词所在段落开始，尽量保留“验证码”标签和相关说明。
+                paragraph_start = prefix.rfind("\n\n", 0, keyword_start)
+                line_start = prefix.rfind("\n", 0, keyword_start)
+                if paragraph_start >= 0 and keyword_start - paragraph_start <= 500:
+                    start = paragraph_start + 2
+                elif line_start >= 0:
+                    start = line_start + 1
+                else:
+                    start = max(0, keyword_start - 300)
+            else:
+                start = max(0, index - 300)
+                line_start = text.find("\n", start, index)
+                if line_start >= 0:
+                    start = line_start + 1
+
+            remaining_context = max(0, int(context_chars or 0) - len(text[start:index]))
+            end = min(len(text), index + len(code) + remaining_context)
+            focused = text[start:end].strip()
+            return focused or text
+
+    keyword_match = keyword_pattern.search(text)
+    if keyword_match and keyword_match.start() > 500:
+        line_start = text.rfind("\n", 0, keyword_match.start())
+        start = 0 if line_start < 0 else line_start + 1
+        return text[start:].strip() or text
+
+    return text
 
 
 def strip_tags_for_telegram_preview(html_content):
