@@ -2,7 +2,6 @@
 
 import os
 import re
-from io import BytesIO
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import Message
@@ -109,67 +108,6 @@ def extract_attachments_from_message(message: Message) -> List[Dict[str, object]
 
 
 
-def _load_telegram_body_font(size: int = 28):
-    from PIL import ImageFont
-
-    font_candidates = [
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "/System/Library/Fonts/Supplemental/Songti.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/arphic/uming.ttc",
-        "/usr/share/fonts/truetype/arphic/ukai.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for font_path in font_candidates:
-        if os.path.exists(font_path):
-            try:
-                font = ImageFont.truetype(font_path, size=size)
-                # 部分西文字体能加载但不能画中文；这里强制探测，避免 Telegram 图片里出现方块。
-                font.getmask("测试中文验证码 884989")
-                return font
-            except Exception:
-                continue
-    return ImageFont.load_default()
-
-
-
-def _wrap_text_for_image(text: str, font, max_width: int) -> List[str]:
-    from PIL import Image, ImageDraw
-
-    measure_img = Image.new("RGB", (1, 1))
-    draw = ImageDraw.Draw(measure_img)
-
-    def text_width(value: str) -> int:
-        if not value:
-            return 0
-        bbox = draw.textbbox((0, 0), value, font=font)
-        return bbox[2] - bbox[0]
-
-    wrapped_lines: List[str] = []
-    for raw_line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        if raw_line == "":
-            wrapped_lines.append("")
-            continue
-        current = ""
-        for char in raw_line:
-            candidate = current + char
-            if current and text_width(candidate) > max_width:
-                wrapped_lines.append(current)
-                current = char
-            else:
-                current = candidate
-        wrapped_lines.append(current)
-    return wrapped_lines or [""]
-
-
-
 def _move_leading_mail_footer_to_end(text: str) -> str:
     """修正部分 HTML 邮件 DOM 顺序：页脚在源码顶部但视觉上应在正文后面。"""
     text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -203,67 +141,28 @@ def _move_leading_mail_footer_to_end(text: str) -> str:
         return text
     return f"{main_body}\n\n{leading_footer}"
 
-
-
-def render_email_body_to_telegram_images(body: str, body_type: str) -> List[BytesIO]:
-    """把邮件正文渲染成 Telegram 可发送的 PNG 图片；只用于通知，不影响网页版正文。"""
-    from PIL import Image, ImageDraw
-
+def _normalize_telegram_text_body(body: str, body_type: str, max_chars: int = 500) -> str:
     if "html" in (body_type or "").lower():
         text = strip_tags_for_telegram_preview(body)
     else:
         text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     text = _move_leading_mail_footer_to_end(text)
+    text = re.sub(r"[\t \f\v\u00a0]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
-        text = "（邮件正文为空）"
-
-    width = 1200
-    max_height = 1800
-    padding = 48
-    line_spacing = 12
-    font = _load_telegram_body_font(28)
-    draw_probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    bbox = draw_probe.textbbox((0, 0), "测试Ag", font=font)
-    line_height = max(36, bbox[3] - bbox[1] + line_spacing)
-    max_lines_per_page = max(1, (max_height - padding * 2) // line_height)
-
-    lines = _wrap_text_for_image(text, font, width - padding * 2)
-    images: List[BytesIO] = []
-    for page_start in range(0, len(lines), max_lines_per_page):
-        page_lines = lines[page_start : page_start + max_lines_per_page]
-        height = max(240, padding * 2 + line_height * len(page_lines))
-        image = Image.new("RGB", (width, height), "white")
-        draw = ImageDraw.Draw(image)
-        y = padding
-        for line in page_lines:
-            draw.text((padding, y), line, fill=(24, 24, 24), font=font)
-            y += line_height
-        output = BytesIO()
-        image.save(output, format="PNG", optimize=True)
-        output.seek(0)
-        output.name = "email-body.png"
-        images.append(output)
-    return images
+        return "（邮件正文为空）"
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "…"
+    return text
 
 
 
-def build_telegram_mail_caption(recipient: str, sender: str, subject: str) -> str:
-    """构造 Telegram 图片 caption，确保不超过 caption 限制且 HTML 标签完整。"""
-    import html
-
-    max_field_length = 220
-
-    def shorten(value: str) -> str:
-        value = str(value or "")
-        if len(value) <= max_field_length:
-            return value
-        return value[: max_field_length - 1] + "…"
-
+def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str) -> str:
     return (
-        "📧 <b>收到新邮件</b>\n\n"
-        f"<b>收件人:</b> <code>{html.escape(shorten(recipient))}</code>\n"
-        f"<b>发件人:</b> <code>{html.escape(shorten(sender))}</code>\n"
-        f"<b>主题:</b> {html.escape(shorten(subject))}"
+        f"收件人: {recipient or ''}\n"
+        f"发件人: {sender or ''}\n"
+        f"主题: {subject or ''}\n\n"
+        f"邮件正文（500字）:\n{body or '（邮件正文为空）'}"
     )
 
 
@@ -593,32 +492,18 @@ def process_email_data(to_address, raw_email_data):
             else:
                 display_sender = final_sender
 
-            tg_text = build_telegram_mail_caption(final_recipient, display_sender, subject)
-
             telegram_body = get_telegram_body_source(body, body_type, msg)
-            body_images = render_email_body_to_telegram_images(telegram_body["body"], telegram_body["body_type"])
-            photo_url = f"https://api.telegram.org/bot{tg_bot_token}/sendPhoto"
-            for index, image_file in enumerate(body_images):
-                data = {"chat_id": tg_chat_id}
-                if index == 0:
-                    data["caption"] = tg_text
-                    data["parse_mode"] = "HTML"
-                else:
-                    data["caption"] = f"邮件正文续页 {index + 1}/{len(body_images)}"
-                res = requests.post(photo_url, data=data, files={"photo": image_file}, timeout=15)
-                if res.status_code != 200:
-                    import logging
-                    logging.getLogger(__name__).error(f"Telegram图片通知响应错误: {res.text}")
-                    if index == 0:
-                        message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
-                        fallback = requests.post(
-                            message_url,
-                            json={"chat_id": tg_chat_id, "text": tg_text, "parse_mode": "HTML"},
-                            timeout=5,
-                        )
-                        if fallback.status_code != 200:
-                            logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {fallback.text}")
-                    break
+            telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"], 500)
+            tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body)
+            message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
+            res = requests.post(
+                message_url,
+                json={"chat_id": tg_chat_id, "text": tg_text},
+                timeout=10,
+            )
+            if res.status_code != 200:
+                import logging
+                logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
