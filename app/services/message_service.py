@@ -109,45 +109,11 @@ def extract_attachments_from_message(message: Message) -> List[Dict[str, object]
 
 
 
-def _move_leading_mail_footer_to_end(text: str) -> str:
-    """修正部分 HTML 邮件 DOM 顺序：页脚在源码顶部但视觉上应在正文后面。"""
-    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return ""
-
-    lines = text.split("\n")
-    first_non_empty = next((line.strip() for line in lines if line.strip()), "")
-    if not re.match(r"^(Subject|主题)\s*:", first_non_empty, re.I):
-        return text
-
-    useful_pattern = re.compile(r"验证码|驗證碼|验证代码|verification\s*code|security\s*code|otp|\b\d{4,8}\b", re.I)
-    if not useful_pattern.search(text):
-        return text
-
-    split_at = None
-    for idx, line in enumerate(lines[1:], start=1):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if useful_pattern.search(stripped) or stripped in {"您好,", "您好，", "Hello,", "Hi,"}:
-            split_at = idx
-            break
-
-    if not split_at or split_at <= 1:
-        return text
-
-    leading_footer = "\n".join(lines[:split_at]).strip()
-    main_body = "\n".join(lines[split_at:]).strip()
-    if not main_body or not leading_footer:
-        return text
-    return f"{main_body}\n\n{leading_footer}"
-
 def _normalize_telegram_text_body(body: str, body_type: str) -> str:
     if "html" in (body_type or "").lower():
         text = strip_tags_for_telegram_preview(body)
     else:
         text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    text = _move_leading_mail_footer_to_end(text)
     text = re.sub(r"[\t \f\v\u00a0]+", " ", text)
     text = re.sub(r"(?m)^\s*>+\s?", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -292,7 +258,7 @@ def _iter_telegram_body_candidates(message: Message) -> List[Dict[str, str]]:
 
 
 def get_telegram_body_source(body: str, body_type: str, message: Message) -> Dict[str, str]:
-    """选择 Telegram 图片正文来源；只影响 Telegram，不改变数据库/网页版正文。"""
+    """选择 Telegram 文本正文来源；只影响 Telegram，不改变数据库/网页版正文。"""
     if "html" in (body_type or "").lower():
         body_text = strip_tags_for_telegram_preview(body)
     else:
