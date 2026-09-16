@@ -313,10 +313,10 @@ def process_email_data(to_address, raw_email_data):
         if tg_enabled == "1" and tg_bot_token and tg_chat_id:
             import requests
             import html
-            import re
             
-            # strip html tags for preview
-            clean_body = re.sub(r'<[^>]+>', '', body)
+            # 生成 Telegram 正文预览。
+            # HTML 邮件里的 <style>/<script> 内容不能只删除标签，否则 CSS/JS 文本会被推送出去。
+            clean_body = strip_tags_for_preview(body) if "html" in (body_type or "").lower() else re.sub(r"\s+", " ", body or "").strip()
             preview = clean_body[:150] + "..." if len(clean_body) > 150 else clean_body
             
             tg_text = f"📧 <b>收到新邮件</b>\n\n"
