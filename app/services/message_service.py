@@ -2,6 +2,7 @@
 
 import os
 import re
+from io import BytesIO
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import Message
@@ -13,7 +14,7 @@ from app.config import SERVER_PUBLIC_IP
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
-from app.utils.mail_utils import extract_code_from_body, focus_preview_around_code, strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
+from app.utils.mail_utils import strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
 
 
 def serialize_moemail_message(row) -> Dict[str, str]:
@@ -105,6 +106,137 @@ def extract_attachments_from_message(message: Message) -> List[Dict[str, object]
             }
         )
     return attachments
+
+
+
+def _load_telegram_body_font(size: int = 28):
+    from PIL import ImageFont
+
+    font_candidates = [
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for font_path in font_candidates:
+        if os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size=size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+
+def _wrap_text_for_image(text: str, font, max_width: int) -> List[str]:
+    from PIL import Image, ImageDraw
+
+    measure_img = Image.new("RGB", (1, 1))
+    draw = ImageDraw.Draw(measure_img)
+
+    def text_width(value: str) -> int:
+        if not value:
+            return 0
+        bbox = draw.textbbox((0, 0), value, font=font)
+        return bbox[2] - bbox[0]
+
+    wrapped_lines: List[str] = []
+    for raw_line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw_line == "":
+            wrapped_lines.append("")
+            continue
+        current = ""
+        for char in raw_line:
+            candidate = current + char
+            if current and text_width(candidate) > max_width:
+                wrapped_lines.append(current)
+                current = char
+            else:
+                current = candidate
+        wrapped_lines.append(current)
+    return wrapped_lines or [""]
+
+
+
+def render_email_body_to_telegram_images(body: str, body_type: str) -> List[BytesIO]:
+    """把邮件正文渲染成 Telegram 可发送的 PNG 图片；只用于通知，不影响网页版正文。"""
+    from PIL import Image, ImageDraw
+
+    if "html" in (body_type or "").lower():
+        text = strip_tags_for_telegram_preview(body)
+    else:
+        text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        text = "（邮件正文为空）"
+
+    width = 1200
+    max_height = 1800
+    padding = 48
+    line_spacing = 12
+    font = _load_telegram_body_font(28)
+    draw_probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    bbox = draw_probe.textbbox((0, 0), "测试Ag", font=font)
+    line_height = max(36, bbox[3] - bbox[1] + line_spacing)
+    max_lines_per_page = max(1, (max_height - padding * 2) // line_height)
+
+    lines = _wrap_text_for_image(text, font, width - padding * 2)
+    images: List[BytesIO] = []
+    for page_start in range(0, len(lines), max_lines_per_page):
+        page_lines = lines[page_start : page_start + max_lines_per_page]
+        height = max(240, padding * 2 + line_height * len(page_lines))
+        image = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+        y = padding
+        for line in page_lines:
+            draw.text((padding, y), line, fill=(24, 24, 24), font=font)
+            y += line_height
+        output = BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        output.seek(0)
+        output.name = "email-body.png"
+        images.append(output)
+    return images
+
+
+
+def build_telegram_mail_caption(recipient: str, sender: str, subject: str) -> str:
+    """构造 Telegram 图片 caption，确保不超过 caption 限制且 HTML 标签完整。"""
+    import html
+
+    max_field_length = 220
+
+    def shorten(value: str) -> str:
+        value = str(value or "")
+        if len(value) <= max_field_length:
+            return value
+        return value[: max_field_length - 1] + "…"
+
+    return (
+        "📧 <b>收到新邮件</b>\n\n"
+        f"<b>收件人:</b> <code>{html.escape(shorten(recipient))}</code>\n"
+        f"<b>发件人:</b> <code>{html.escape(shorten(sender))}</code>\n"
+        f"<b>主题:</b> {html.escape(shorten(subject))}"
+    )
+
+
+
+def get_telegram_body_source(body: str, body_type: str, message: Message) -> Dict[str, str]:
+    """选择 Telegram 图片正文来源；只影响 Telegram，不改变数据库/网页版正文。"""
+    if "html" in (body_type or "").lower():
+        body_text = strip_tags_for_telegram_preview(body)
+    else:
+        body_text = str(body or "").strip()
+
+    if strip_forwarded_headers_for_preview(body_text):
+        return {"body": body or "", "body_type": body_type or "text/plain"}
+
+    fallback_text = strip_forwarded_headers_for_preview(extract_body_from_message(message))
+    if fallback_text:
+        return {"body": fallback_text, "body_type": "text/plain"}
+
+    return {"body": body or "", "body_type": body_type or "text/plain"}
 
 
 
@@ -308,37 +440,9 @@ def process_email_data(to_address, raw_email_data):
         tg_bot_token = get_app_setting("tg_bot_token")
         tg_chat_id = get_app_setting("tg_chat_id")
         tg_sender_format = get_app_setting("tg_sender_format", "full")
-        tg_recipient_display = get_app_setting("tg_recipient_display", "show")
         
         if tg_enabled == "1" and tg_bot_token and tg_chat_id:
             import requests
-            import html
-            
-            # 生成 Telegram 正文预览。
-            # HTML 邮件里的 <style>/<script> 内容不能只删除标签，否则 CSS/JS 文本会被推送出去。
-            if "html" in (body_type or "").lower():
-                clean_body = strip_tags_for_telegram_preview(body)
-            else:
-                clean_body = re.sub(r"[\t \f\v]+", " ", body or "").strip()
-                clean_body = re.sub(r"\n{3,}", "\n\n", clean_body)
-            clean_body = strip_forwarded_headers_for_preview(clean_body)
-            if not clean_body:
-                # 有些客户端转发时，外层正文只包含 Forwarded message/From/Date/Subject，
-                # 真正的验证码正文在后续 MIME part 或嵌套 message/rfc822 中。数据库仍保存
-                # 原始展示正文；Telegram 预览为空时再扫描整封邮件，避免只推送转发头。
-                clean_body = strip_forwarded_headers_for_preview(extract_body_from_message(msg))
-            code = extract_code_from_body(f"{subject}\n{clean_body}")
-            clean_body = focus_preview_around_code(clean_body, code)
-            preview_limit = 2000
-            preview = clean_body[:preview_limit] + "..." if len(clean_body) > preview_limit else clean_body
-            
-            tg_text = f"📧 <b>收到新邮件</b>\n\n"
-            
-            # also check both keys for compatibility
-            tg_recipient_display = get_app_setting("tg_recipient_display") or get_app_setting("tg_recipient_format", "show")
-            
-            if tg_recipient_display == "show":
-                tg_text += f"<b>收件人:</b> <code>{html.escape(final_recipient)}</code>\n"
                 
             sender_name, sender_addr = email.utils.parseaddr(final_sender)
             if tg_sender_format == "name" and sender_name:
@@ -347,25 +451,33 @@ def process_email_data(to_address, raw_email_data):
                 display_sender = sender_addr
             else:
                 display_sender = final_sender
-                
-            tg_text += f"<b>发件人:</b> <code>{html.escape(display_sender)}</code>\n"
-            tg_text += f"<b>主题:</b> {html.escape(subject)}\n\n"
-            if code:
-                tg_text += f"<b>验证码:</b> <code>{html.escape(code)}</code>\n\n"
-            tg_text += f"{html.escape(preview)}"
-            if len(tg_text) > 3900:
-                tg_text = tg_text[:3897] + "..."
-            
-            url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
-            payload = {
-                "chat_id": tg_chat_id,
-                "text": tg_text,
-                "parse_mode": "HTML"
-            }
-            res = requests.post(url, json=payload, timeout=5)
-            if res.status_code != 200:
-                import logging
-                logging.getLogger(__name__).error(f"Telegram通知响应错误: {res.text}")
+
+            tg_text = build_telegram_mail_caption(final_recipient, display_sender, subject)
+
+            telegram_body = get_telegram_body_source(body, body_type, msg)
+            body_images = render_email_body_to_telegram_images(telegram_body["body"], telegram_body["body_type"])
+            photo_url = f"https://api.telegram.org/bot{tg_bot_token}/sendPhoto"
+            for index, image_file in enumerate(body_images):
+                data = {"chat_id": tg_chat_id}
+                if index == 0:
+                    data["caption"] = tg_text
+                    data["parse_mode"] = "HTML"
+                else:
+                    data["caption"] = f"邮件正文续页 {index + 1}/{len(body_images)}"
+                res = requests.post(photo_url, data=data, files={"photo": image_file}, timeout=15)
+                if res.status_code != 200:
+                    import logging
+                    logging.getLogger(__name__).error(f"Telegram图片通知响应错误: {res.text}")
+                    if index == 0:
+                        message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
+                        fallback = requests.post(
+                            message_url,
+                            json={"chat_id": tg_chat_id, "text": tg_text, "parse_mode": "HTML"},
+                            timeout=5,
+                        )
+                        if fallback.status_code != 200:
+                            logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {fallback.text}")
+                    break
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
