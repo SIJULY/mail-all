@@ -7,9 +7,10 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.policy import default as email_policy
 from email.utils import getaddresses, parseaddr
+from urllib.parse import quote
 from typing import Dict, List
 
-from app.config import SERVER_PUBLIC_IP
+from app.config import SERVER_PUBLIC_IP, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
@@ -141,19 +142,23 @@ def _move_leading_mail_footer_to_end(text: str) -> str:
         return text
     return f"{main_body}\n\n{leading_footer}"
 
-def _normalize_telegram_text_body(body: str, body_type: str, max_chars: int = 500) -> str:
+def _normalize_telegram_text_body(body: str, body_type: str) -> str:
     if "html" in (body_type or "").lower():
         text = strip_tags_for_telegram_preview(body)
     else:
         text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     text = _move_leading_mail_footer_to_end(text)
     text = re.sub(r"[\t \f\v\u00a0]+", " ", text)
+    text = re.sub(r"(?m)^\s*>+\s?", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
         return "（邮件正文为空）"
-    if len(text) > max_chars:
-        return text[:max_chars].rstrip() + "…"
     return text
+
+
+
+def build_webmail_url(recipient: str) -> str:
+    return f"https://mail.sijuly.uk//Mail?token={quote(str(SPECIAL_VIEW_TOKEN or ''))}&mail={quote(str(recipient or ''), safe='@')}"
 
 
 
@@ -162,8 +167,30 @@ def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: st
         f"收件人: {recipient or ''}\n"
         f"发件人: {sender or ''}\n"
         f"主题: {subject or ''}\n\n"
-        f"邮件正文（500字）:\n{body or '（邮件正文为空）'}"
+        f"{body or '（邮件正文为空）'}\n\n"
+        f"完整邮件: {build_webmail_url(recipient)}"
     )
+
+
+
+def split_telegram_text(text: str, max_chars: int = 3900) -> List[str]:
+    text = str(text or "")
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: List[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        split_at = remaining.rfind("\n\n", 0, max_chars)
+        if split_at < max_chars // 2:
+            split_at = remaining.rfind("\n", 0, max_chars)
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 
@@ -493,17 +520,19 @@ def process_email_data(to_address, raw_email_data):
                 display_sender = final_sender
 
             telegram_body = get_telegram_body_source(body, body_type, msg)
-            telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"], 500)
+            telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
             tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body)
             message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
-            res = requests.post(
-                message_url,
-                json={"chat_id": tg_chat_id, "text": tg_text},
-                timeout=10,
-            )
-            if res.status_code != 200:
-                import logging
-                logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
+            for text_chunk in split_telegram_text(tg_text):
+                res = requests.post(
+                    message_url,
+                    json={"chat_id": tg_chat_id, "text": text_chunk, "disable_web_page_preview": True},
+                    timeout=10,
+                )
+                if res.status_code != 200:
+                    import logging
+                    logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
+                    break
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
