@@ -10,7 +10,7 @@ from email.utils import getaddresses, parseaddr
 from urllib.parse import quote
 from typing import Dict, List
 
-from app.config import SERVER_PUBLIC_IP, SPECIAL_VIEW_TOKEN
+from app.config import PUBLIC_BASE_URL, SERVER_PUBLIC_IP, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
@@ -158,7 +158,14 @@ def _normalize_telegram_text_body(body: str, body_type: str) -> str:
 
 
 def build_webmail_url(recipient: str) -> str:
-    return f"https://mail.sijuly.uk//Mail?token={quote(str(SPECIAL_VIEW_TOKEN or ''))}&mail={quote(str(recipient or ''), safe='@')}"
+    from app.repositories.settings_repo import get_app_setting
+
+    base_url = (get_app_setting("public_base_url", "") or PUBLIC_BASE_URL or "").strip().rstrip("/")
+    if not base_url and SERVER_PUBLIC_IP:
+        base_url = f"http://{SERVER_PUBLIC_IP}:2099"
+    if not base_url:
+        base_url = ""
+    return f"{base_url}/Mail?token={quote(str(SPECIAL_VIEW_TOKEN or ''))}&mail={quote(str(recipient or ''), safe='@')}"
 
 
 
