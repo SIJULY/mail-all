@@ -268,7 +268,8 @@ def strip_forwarded_headers_for_preview(text):
     return str(text).strip()
 
 
-def strip_tags_for_preview(html_content):
+def strip_tags_for_telegram_preview(html_content):
+    """把 HTML 邮件转换成适合 Telegram 通知的纯文本，保留必要换行。"""
     if not html_content:
         return ""
     parser = _HTMLPreviewParser()
@@ -279,6 +280,13 @@ def strip_tags_for_preview(html_content):
     except Exception:
         text_content = re.sub(r"<style.*?</style>|<script.*?</script>|<[^>]+>", "\n", str(html_content), flags=re.S | re.I)
         return _normalize_preview_text(text_content)
+
+
+def strip_tags_for_preview(html_content):
+    if not html_content:
+        return ""
+    text_content = re.sub(r"<style.*?</style>|<script.*?</script>|<[^>]+>", " ", str(html_content), flags=re.S)
+    return re.sub(r"\s+", " ", text_content).strip()
 
 
 

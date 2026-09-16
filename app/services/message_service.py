@@ -13,7 +13,7 @@ from app.config import SERVER_PUBLIC_IP
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
-from app.utils.mail_utils import extract_code_from_body, strip_forwarded_headers_for_preview, strip_tags_for_preview
+from app.utils.mail_utils import extract_code_from_body, strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
 
 
 def serialize_moemail_message(row) -> Dict[str, str]:
@@ -317,7 +317,7 @@ def process_email_data(to_address, raw_email_data):
             # 生成 Telegram 正文预览。
             # HTML 邮件里的 <style>/<script> 内容不能只删除标签，否则 CSS/JS 文本会被推送出去。
             if "html" in (body_type or "").lower():
-                clean_body = strip_tags_for_preview(body)
+                clean_body = strip_tags_for_telegram_preview(body)
             else:
                 clean_body = re.sub(r"[\t \f\v]+", " ", body or "").strip()
                 clean_body = re.sub(r"\n{3,}", "\n\n", clean_body)
