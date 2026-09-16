@@ -162,7 +162,6 @@ class _HTMLPreviewParser(HTMLParser):
         self.parts = []
         self.skip_depth = 0
         self.hidden_depth = 0
-        self.link_stack = []
 
     def _append_newline(self):
         if not self.parts or self.parts[-1] != "\n":
@@ -215,10 +214,6 @@ class _HTMLPreviewParser(HTMLParser):
         # 图片 alt 文本在邮件通知里经常重复标题或品牌名，直接忽略图片节点。
         if tag == "img":
             return
-        if tag == "a":
-            attrs_dict = {str(k).lower(): str(v or "") for k, v in attrs}
-            self.link_stack.append(attrs_dict.get("href", ""))
-            return
         if tag in self.CELL_TAGS:
             self._append_inline_separator(" ")
             return
@@ -234,12 +229,6 @@ class _HTMLPreviewParser(HTMLParser):
             self.hidden_depth -= 1
             return
         if tag == "a":
-            href = self.link_stack.pop() if self.link_stack else ""
-            href = str(href or "").strip()
-            if href and not href.lower().startswith(("mailto:", "javascript:")):
-                recent_text = "".join(self.parts[-8:]).strip()
-                if href not in recent_text:
-                    self.parts.append(f" ({href})")
             return
         if tag in self.CELL_TAGS:
             self._append_inline_separator(" ")
@@ -273,6 +262,9 @@ def _normalize_preview_text(text):
     previous_non_empty = ""
     for raw_line in text.split("\n"):
         line = re.sub(r"[\t \f\v\u00a0]+", " ", raw_line).strip()
+        line = re.sub(r"https?://\S+", "", line, flags=re.I).strip()
+        line = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", line)
+        line = re.sub(r"[（(]\s*[）)]", "", line).strip()
         if not line:
             if lines and lines[-1] != "":
                 lines.append("")

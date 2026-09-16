@@ -140,10 +140,10 @@ def _truncate_telegram_body_for_single_message(body: str, max_chars: int) -> str
     if len(body) <= max_chars:
         return body
 
-    truncation_notice = "\n\n……\n（正文已截断，请点击底部完整邮件链接查看）"
-    available = max(0, max_chars - len(truncation_notice))
+    truncation_suffix = "\n\n……"
+    available = max(0, max_chars - len(truncation_suffix))
     if available <= 0:
-        return truncation_notice.strip()
+        return "……"
 
     truncated = body[:available].rstrip()
     split_at = truncated.rfind("\n\n")
@@ -161,7 +161,7 @@ def _truncate_telegram_body_for_single_message(body: str, max_chars: int) -> str
     if split_at >= available * 0.6:
         truncated = truncated[: split_at + 1].rstrip()
 
-    return f"{truncated}{truncation_notice}"
+    return f"{truncated}{truncation_suffix}"
 
 
 
