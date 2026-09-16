@@ -83,6 +83,7 @@ def extract_code_from_body(body_text):
             r"(?:code|验证码|驗證碼|検証コード|otp|授权码|校验码|确认码|激活码|登录码|登入碼|代码)[^A-Z0-9]{0,20}([A-Z0-9]{2,6}-[A-Z0-9]{2,6})",
             r"(?:your\s+chatgpt\s+code\s+is|your\s+code\s+is|verification\s+code|temporary\s+verification\s+code|authentication\s+code|log-?in\s+code|login\s+code|otp|security\s+code|安全代码|一次性代码|一次性密碼|一次性密码|one-time\s+code|one\s+time\s+code|one-time\s+password)[^\d]{0,30}(\d{4,8})",
             r"(?:code|验证码|驗證碼|検証コード|otp|授权码|校验码|确认码|激活码|登录码|登入碼|代码)[^\d]{0,12}(\d{4,8})",
+            r"(?<![a-zA-Z0-9])(\d{4,8})(?![a-zA-Z0-9])[^\n\r]{0,40}(?:is|为|是|就是|即为|作為|作为)[^\n\r]{0,20}(?:verification\s+code|authentication\s+code|security\s+code|one[- ]time\s+(?:code|password)|otp|验证码|驗證碼|验证代码|安全代码|一次性代码|一次性密碼|一次性密码|代码)",
         ]
         for pat in semantic_patterns:
             m = re.search(pat, body_text, re.IGNORECASE)
@@ -248,8 +249,9 @@ def strip_forwarded_headers_for_preview(text):
     forwarded_marker = re.compile(r"-{2,}\s*Forwarded message\s*-{2,}", re.I)
 
     marker_match = forwarded_marker.search(normalized_text)
-    # 只剥离出现在预览开头附近的转发头，避免误删正文里正常引用的内容。
-    if marker_match and marker_match.start() <= 200:
+    # Telegram 通知本身已经单独显示收件人/发件人/主题；只要正文里存在标准转发头，
+    # 预览应直接展示转发邮件的实际内容，而不是再次展示 From/Date/Subject。
+    if marker_match:
         normalized_text = normalized_text[marker_match.start():]
 
     # HTML 清理后偶尔会把转发标记和 From/Date/Subject 挤在同一行，先补回换行。
@@ -269,12 +271,20 @@ def strip_forwarded_headers_for_preview(text):
     if start < len(lines) and re.match(r"^-{2,}\s*Forwarded message\s*-{2,}", lines[start].strip(), re.I):
         idx = start + 1
         header_pattern = re.compile(r"^(From|To|Cc|Date|Subject|Reply-To|发件人|收件人|日期|时间|主题)\s*:", re.I)
+        subject_with_body_pattern = re.compile(
+            r"^(?:Subject|主题)\s*:[^\n\r]*?\s+((?:\d{4,8}\s*(?:is|为|是|就是|即为|作為|作为).*)|(?:.*?(?:验证码|驗證碼|verification\s+code|security\s+code|otp).*?\d{4,8}.*))$",
+            re.I,
+        )
         while idx < len(lines):
             stripped = lines[idx].strip()
             if not stripped:
                 idx += 1
                 break
             if header_pattern.match(stripped):
+                subject_with_body = subject_with_body_pattern.match(stripped)
+                if subject_with_body:
+                    lines[idx] = subject_with_body.group(1).strip()
+                    break
                 idx += 1
                 continue
             break
