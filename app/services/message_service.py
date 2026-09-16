@@ -114,16 +114,26 @@ def _load_telegram_body_font(size: int = 28):
 
     font_candidates = [
         "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Songti.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
+        "/usr/share/fonts/truetype/arphic/ukai.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for font_path in font_candidates:
         if os.path.exists(font_path):
             try:
-                return ImageFont.truetype(font_path, size=size)
+                font = ImageFont.truetype(font_path, size=size)
+                # 部分西文字体能加载但不能画中文；这里强制探测，避免 Telegram 图片里出现方块。
+                font.getmask("测试中文验证码 884989")
+                return font
             except Exception:
                 continue
     return ImageFont.load_default()
@@ -160,6 +170,41 @@ def _wrap_text_for_image(text: str, font, max_width: int) -> List[str]:
 
 
 
+def _move_leading_mail_footer_to_end(text: str) -> str:
+    """修正部分 HTML 邮件 DOM 顺序：页脚在源码顶部但视觉上应在正文后面。"""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+
+    lines = text.split("\n")
+    first_non_empty = next((line.strip() for line in lines if line.strip()), "")
+    if not re.match(r"^(Subject|主题)\s*:", first_non_empty, re.I):
+        return text
+
+    useful_pattern = re.compile(r"验证码|驗證碼|验证代码|verification\s*code|security\s*code|otp|\b\d{4,8}\b", re.I)
+    if not useful_pattern.search(text):
+        return text
+
+    split_at = None
+    for idx, line in enumerate(lines[1:], start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if useful_pattern.search(stripped) or stripped in {"您好,", "您好，", "Hello,", "Hi,"}:
+            split_at = idx
+            break
+
+    if not split_at or split_at <= 1:
+        return text
+
+    leading_footer = "\n".join(lines[:split_at]).strip()
+    main_body = "\n".join(lines[split_at:]).strip()
+    if not main_body or not leading_footer:
+        return text
+    return f"{main_body}\n\n{leading_footer}"
+
+
+
 def render_email_body_to_telegram_images(body: str, body_type: str) -> List[BytesIO]:
     """把邮件正文渲染成 Telegram 可发送的 PNG 图片；只用于通知，不影响网页版正文。"""
     from PIL import Image, ImageDraw
@@ -168,6 +213,7 @@ def render_email_body_to_telegram_images(body: str, body_type: str) -> List[Byte
         text = strip_tags_for_telegram_preview(body)
     else:
         text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = _move_leading_mail_footer_to_end(text)
     if not text:
         text = "（邮件正文为空）"
 
@@ -222,6 +268,96 @@ def build_telegram_mail_caption(recipient: str, sender: str, subject: str) -> st
 
 
 
+def _decode_text_part(part: Message) -> str:
+    try:
+        payload = part.get_payload(decode=True)
+        charset = part.get_content_charset() or "utf-8"
+        return payload.decode(charset, errors="replace") if payload else ""
+    except Exception:
+        try:
+            return part.get_content()
+        except Exception:
+            return str(part.get_payload() or "")
+
+
+
+def _looks_like_forward_header_only(text: str) -> bool:
+    cleaned = strip_forwarded_headers_for_preview(text)
+    if not cleaned:
+        return True
+    lowered = cleaned.lower()
+    footer_tokens = [
+        "amazon web services, inc.",
+        "410 terry ave",
+        "amazon.com is a registered trademark",
+        "制作和分发",
+    ]
+    has_useful_token = bool(
+        re.search(
+            r"验证码|驗證碼|验证代码|verification\s*code|security\s*code|otp|\b\d{4,8}\b",
+            cleaned,
+            re.I,
+        )
+    )
+    return any(token in lowered for token in footer_tokens) and not has_useful_token
+
+
+
+def _score_telegram_body_candidate(text: str, content_type: str) -> int:
+    cleaned = strip_forwarded_headers_for_preview(text)
+    if not cleaned:
+        return -10000
+
+    score = 0
+    if content_type == "text/html":
+        score += 800
+    if re.search(r"验证码|驗證碼|验证代码|verification\s*code|security\s*code|one[- ]time|otp", cleaned, re.I):
+        score += 3000
+    if re.search(r"(?<![A-Za-z0-9])\d{4,8}(?![A-Za-z0-9])", cleaned):
+        score += 1200
+    if "aws" in cleaned.lower() or "amazon web services" in cleaned.lower():
+        score += 400
+    if _looks_like_forward_header_only(text):
+        score -= 2500
+
+    # 邮件正文太短通常只是转发头；太长可能是 HTML/CSS 噪声，长度只作温和加分。
+    score += min(len(cleaned), 3000) // 10
+    return score
+
+
+
+def _iter_telegram_body_candidates(message: Message) -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+
+    parts = list(message.walk()) if message.is_multipart() else [message]
+    for part in parts:
+        if part.get_content_maintype() == "multipart":
+            continue
+        content_type = (part.get_content_type() or "").lower()
+        if content_type not in ("text/html", "text/plain"):
+            continue
+        if str(part.get("Content-Disposition") or "").lower().startswith("attachment"):
+            continue
+
+        raw_body = _decode_text_part(part)
+        if not raw_body:
+            continue
+        text_for_scoring = strip_tags_for_telegram_preview(raw_body) if content_type == "text/html" else raw_body
+        stripped_text = strip_forwarded_headers_for_preview(text_for_scoring)
+        if not stripped_text:
+            continue
+        candidates.append(
+            {
+                "body": raw_body if content_type == "text/html" else stripped_text,
+                "body_type": content_type,
+                "score": str(_score_telegram_body_candidate(text_for_scoring, content_type)),
+            }
+        )
+
+    return candidates
+
+
+
 def get_telegram_body_source(body: str, body_type: str, message: Message) -> Dict[str, str]:
     """选择 Telegram 图片正文来源；只影响 Telegram，不改变数据库/网页版正文。"""
     if "html" in (body_type or "").lower():
@@ -229,12 +365,17 @@ def get_telegram_body_source(body: str, body_type: str, message: Message) -> Dic
     else:
         body_text = str(body or "").strip()
 
-    if strip_forwarded_headers_for_preview(body_text):
+    current_cleaned = strip_forwarded_headers_for_preview(body_text)
+    current_score = _score_telegram_body_candidate(body_text, "text/html" if "html" in (body_type or "").lower() else "text/plain")
+    part_candidates = _iter_telegram_body_candidates(message)
+    best_part = max(part_candidates, key=lambda item: int(item["score"]), default=None)
+
+    # 如果当前入库正文已经是好正文，就保持和网页版一致；否则用 MIME 中分数最高的正文 part。
+    if current_cleaned and (not best_part or current_score >= int(best_part["score"]) - 200):
         return {"body": body or "", "body_type": body_type or "text/plain"}
 
-    fallback_text = strip_forwarded_headers_for_preview(extract_body_from_message(message))
-    if fallback_text:
-        return {"body": fallback_text, "body_type": "text/plain"}
+    if best_part:
+        return {"body": best_part["body"], "body_type": best_part["body_type"]}
 
     return {"body": body or "", "body_type": body_type or "text/plain"}
 
