@@ -1,6 +1,7 @@
 """邮件工具模块。"""
 
 import html
+from html.parser import HTMLParser
 import random
 import re
 import string
@@ -137,11 +138,147 @@ def linkify_plain_text(text: str) -> str:
 
 
 
+class _HTMLPreviewParser(HTMLParser):
+    """把 HTML 邮件转换成适合通知预览的纯文本。"""
+
+    BLOCK_TAGS = {
+        "address", "article", "aside", "blockquote", "div", "dl", "dt", "dd",
+        "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+        "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p",
+        "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+    }
+    SKIP_TAGS = {"script", "style", "head", "title", "meta", "noscript", "svg", "canvas"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+        self.hidden_depth = 0
+
+    def _append_newline(self):
+        if not self.parts or self.parts[-1] != "\n":
+            self.parts.append("\n")
+
+    def _is_hidden(self, attrs):
+        attrs_dict = {str(k).lower(): str(v or "").lower() for k, v in attrs}
+        if "hidden" in attrs_dict or attrs_dict.get("aria-hidden") == "true":
+            return True
+        style = re.sub(r"\s+", "", attrs_dict.get("style", ""))
+        hidden_style_tokens = [
+            "display:none",
+            "visibility:hidden",
+            "opacity:0",
+            "font-size:0",
+            "max-height:0",
+            "height:0",
+            "width:0",
+        ]
+        return any(token in style for token in hidden_style_tokens)
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if self.skip_depth:
+            self.skip_depth += 1
+            return
+        if self.hidden_depth:
+            self.hidden_depth += 1
+            return
+        if tag in self.SKIP_TAGS:
+            self.skip_depth = 1
+            return
+        if self._is_hidden(attrs):
+            self.hidden_depth = 1
+            return
+        # 图片 alt 文本在邮件通知里经常重复标题或品牌名，直接忽略图片节点。
+        if tag == "img":
+            return
+        if tag in {"br", "hr"} or tag in self.BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if self.hidden_depth:
+            self.hidden_depth -= 1
+            return
+        if tag in self.BLOCK_TAGS:
+            self._append_newline()
+
+    def handle_data(self, data):
+        if self.skip_depth or self.hidden_depth:
+            return
+        data = str(data or "")
+        if not data.strip():
+            return
+        self.parts.append(data)
+
+    def get_text(self):
+        return "".join(self.parts)
+
+
+def _normalize_preview_text(text):
+    text = html.unescape(str(text or "")).replace("\r\n", "\n").replace("\r", "\n")
+    lines = []
+    previous_non_empty = ""
+    for raw_line in text.split("\n"):
+        line = re.sub(r"[\t \f\v\u00a0]+", " ", raw_line).strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        # 去掉邮件模板里常见的连续重复标题/alt 文本。
+        if line == previous_non_empty:
+            continue
+        lines.append(line)
+        previous_non_empty = line
+
+    normalized = "\n".join(lines).strip()
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized
+
+
+def strip_forwarded_headers_for_preview(text):
+    """移除预览开头的转发头，避免 Telegram 通知重复显示 From/Date/Subject。"""
+    if not text:
+        return ""
+
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+
+    if start < len(lines) and re.match(r"^-{2,}\s*Forwarded message\s*-{2,}", lines[start].strip(), re.I):
+        idx = start + 1
+        header_pattern = re.compile(r"^(From|To|Cc|Date|Subject|Reply-To|发件人|收件人|日期|时间|主题)\s*:", re.I)
+        while idx < len(lines):
+            stripped = lines[idx].strip()
+            if not stripped:
+                idx += 1
+                break
+            if header_pattern.match(stripped):
+                idx += 1
+                continue
+            break
+        stripped_text = "\n".join(lines[idx:]).strip()
+        if stripped_text:
+            return stripped_text
+
+    return str(text).strip()
+
+
 def strip_tags_for_preview(html_content):
     if not html_content:
         return ""
-    text_content = re.sub(r"<style.*?</style>|<script.*?</script>|<[^>]+>", " ", html_content, flags=re.S)
-    return re.sub(r"\s+", " ", text_content).strip()
+    parser = _HTMLPreviewParser()
+    try:
+        parser.feed(str(html_content))
+        parser.close()
+        return _normalize_preview_text(parser.get_text())
+    except Exception:
+        text_content = re.sub(r"<style.*?</style>|<script.*?</script>|<[^>]+>", "\n", str(html_content), flags=re.S | re.I)
+        return _normalize_preview_text(text_content)
 
 
 
