@@ -163,6 +163,11 @@ def build_mail_query_context(is_admin_view, recipient_override=None, nav_mode="i
 
     total_emails = len(filtered_ids)
     total_pages = math.ceil(total_emails / per_page) if total_emails > 0 else 1
+    if selected_id in filtered_ids:
+        selected_index = filtered_ids.index(selected_id)
+        page = selected_index // per_page + 1
+    elif selected_id is not None:
+        selected_id = None
     if page > total_pages:
         page = total_pages
     offset = (page - 1) * per_page
