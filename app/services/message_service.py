@@ -132,9 +132,10 @@ def build_webmail_url(recipient: str, email_id=None) -> str:
     if not base_url:
         base_url = ""
     token_str = quote(str(SPECIAL_VIEW_TOKEN or ''))
+    mail_str = quote(str(recipient or ''), safe='@')
     if email_id:
-        return f"{base_url}/view_email_token/{email_id}?token={token_str}"
-    return f"{base_url}/Mail?token={token_str}&mail={quote(str(recipient or ''), safe='@')}"
+        return f"{base_url}/view_email_token/{email_id}?token={token_str}&mail={mail_str}"
+    return f"{base_url}/Mail?token={token_str}&mail={mail_str}"
 
 
 
