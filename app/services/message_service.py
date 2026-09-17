@@ -123,7 +123,7 @@ def _normalize_telegram_text_body(body: str, body_type: str) -> str:
 
 
 
-def build_webmail_url(recipient: str) -> str:
+def build_webmail_url(recipient: str, email_id=None) -> str:
     from app.repositories.settings_repo import get_app_setting
 
     base_url = (get_app_setting("public_base_url", "") or PUBLIC_BASE_URL or "").strip().rstrip("/")
@@ -131,7 +131,10 @@ def build_webmail_url(recipient: str) -> str:
         base_url = f"http://{SERVER_PUBLIC_IP}:2099"
     if not base_url:
         base_url = ""
-    return f"{base_url}/Mail?token={quote(str(SPECIAL_VIEW_TOKEN or ''))}&mail={quote(str(recipient or ''), safe='@')}"
+    url = f"{base_url}/Mail?token={quote(str(SPECIAL_VIEW_TOKEN or ''))}&mail={quote(str(recipient or ''), safe='@')}"
+    if email_id:
+        url += f"&selected_id={quote(str(email_id))}"
+    return url
 
 
 
@@ -165,14 +168,14 @@ def _truncate_telegram_body_for_single_message(body: str, max_chars: int) -> str
 
 
 
-def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str, max_chars: int = 3900) -> str:
+def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str, email_id=None, max_chars: int = 3900) -> str:
     header = (
         "📧 收到新邮件\n\n"
         f"收件人: {recipient or ''}\n"
         f"发件人: {sender or ''}\n"
         f"主题: {subject or ''}\n\n"
     )
-    footer = f"\n\n完整邮件: {build_webmail_url(recipient)}"
+    footer = f"\n\n完整邮件: {build_webmail_url(recipient, email_id)}"
     body_max_chars = max(0, int(max_chars or 3900) - len(header) - len(footer))
     body_text = _truncate_telegram_body_for_single_message(body, body_max_chars)
     return f"{header}{body_text}{footer}"
@@ -506,7 +509,7 @@ def process_email_data(to_address, raw_email_data):
 
             telegram_body = get_telegram_body_source(body, body_type, msg)
             telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
-            tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body)
+            tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body, email_id=email_id)
             message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
             res = requests.post(
                 message_url,
