@@ -1,5 +1,6 @@
 """UI 路由模块。"""
 
+import html
 from datetime import datetime, timezone
 
 from flask import jsonify, redirect, request, session, url_for
@@ -319,7 +320,7 @@ def register_ui_routes(app):
             get_smtp_config,
             send_email_via_smtp,
         )
-        from app.utils.mail_utils import strip_tags_for_preview
+        from app.utils.mail_utils import quote_text_as_html, sanitize_quoted_html, strip_tags_for_preview
         from email.utils import parseaddr
 
         try:
@@ -532,17 +533,17 @@ def register_ui_routes(app):
                     )
 
                     if "html" in original_body_type.lower():
-                        quoted_text_html = original_body
+                        quoted_text_html = sanitize_quoted_html(original_body)
                     else:
-                        quoted_text_html = "<br>".join(
-                            [f"> {line}" for line in original_body.splitlines()]
-                        )
+                        quoted_text_html = quote_text_as_html(original_body)
+                    safe_sender_html = html.escape(original_email["sender"] or "")
+                    safe_subject_html = html.escape(original_subject)
                     if reply_to_id:
                         form_data["body"] = f"\n\n\n--- On {bjt_str}, {original_email['sender']} wrote: ---\n{quoted_text}"
-                        form_data["html_body"] = f"<br><br><br><div>--- On {bjt_str}, {original_email['sender']} wrote: ---</div><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
+                        form_data["html_body"] = f"<br><br><br><div>--- On {bjt_str}, {safe_sender_html} wrote: ---</div><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
                     else:
                         form_data["body"] = f"\n\n\n--- Forwarded message ---\nFrom: {original_email['sender']}\nDate: {bjt_str}\nSubject: {original_subject}\n\n{quoted_text}"
-                        form_data["html_body"] = f"<br><br><br><div>--- Forwarded message ---</div><div>From: {original_email['sender']}</div><div>Date: {bjt_str}</div><div>Subject: {original_subject}</div><br><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
+                        form_data["html_body"] = f"<br><br><br><div>--- Forwarded message ---</div><div>From: {safe_sender_html}</div><div>Date: {bjt_str}</div><div>Subject: {safe_subject_html}</div><br><blockquote style='border-left: 2px solid #ccc; margin-left: 0; padding-left: 10px;'>{quoted_text_html}</blockquote>"
 
                     form_data["editor_mode"] = "html"
                     form_data["attachments"] = []

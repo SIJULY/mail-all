@@ -428,3 +428,36 @@ def generate_subdomain_label(min_length: int = 3, max_length: int = 5) -> str:
     max_length = max(min_length, int(max_length or 5))
     length = random.randint(min_length, max_length)
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+
+
+def sanitize_quoted_html(html_content: str) -> str:
+    """清洗回复/转发时引用的原邮件 HTML，使其可安全嵌入写信编辑器。
+
+    使用 bleach 白名单保留基础排版标签，剥离 script/style、事件属性、
+    style 属性及非 http(s)/mailto 链接；未安装 bleach 时降级为全文转义
+    （排版丢失但保证安全）。
+    """
+    content = html_content or ""
+    try:
+        import bleach
+    except ImportError:
+        return html.escape(content)
+    return bleach.clean(
+        content,
+        tags=[
+            "a", "b", "blockquote", "br", "code", "div", "em",
+            "h1", "h2", "h3", "h4", "hr", "i", "li", "ol",
+            "p", "pre", "span", "strong", "u", "ul",
+        ],
+        attributes={"a": ["href", "title"], "*": ["title"]},
+        protocols=["http", "https", "mailto"],
+        strip=True,
+        strip_comments=True,
+    )
+
+
+
+def quote_text_as_html(text: str) -> str:
+    """将纯文本按行转义为 HTML，并加上 '>' 引用前缀。"""
+    return "<br>".join(f"&gt; {html.escape(line)}" for line in (text or "").splitlines())
