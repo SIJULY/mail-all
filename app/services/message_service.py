@@ -2,6 +2,9 @@
 
 import os
 import re
+import logging
+import sqlite3
+import threading
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import Message
@@ -378,8 +381,56 @@ def resolve_inbound_recipient(message: Message, to_address) -> str:
 
 
 
+def _send_telegram_notification(recipient, sender, subject, body, body_type, msg, email_id):
+    """后台线程发送 Telegram 通知。失败只记日志，不影响投递确认（250 OK 先回）。"""
+    try:
+        from app.repositories.settings_repo import get_app_setting
+        import email.utils
+        import requests
+
+        tg_enabled = get_app_setting("tg_enabled", "0")
+        tg_bot_token = get_app_setting("tg_bot_token")
+        tg_chat_id = get_app_setting("tg_chat_id")
+        tg_sender_format = get_app_setting("tg_sender_format", "full")
+
+        if tg_enabled != "1" or not tg_bot_token or not tg_chat_id:
+            return
+
+        sender_name, sender_addr = email.utils.parseaddr(sender)
+        if tg_sender_format == "name" and sender_name:
+            display_sender = sender_name
+        elif tg_sender_format == "email" and sender_addr:
+            display_sender = sender_addr
+        else:
+            display_sender = sender
+
+        telegram_body = get_telegram_body_source(body, body_type, msg)
+        telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
+        tg_text = build_telegram_mail_text(recipient, display_sender, subject, telegram_text_body, email_id=email_id)
+        res = requests.post(
+            f"https://api.telegram.org/bot{tg_bot_token}/sendMessage",
+            json={"chat_id": tg_chat_id, "text": tg_text, "disable_web_page_preview": True},
+            timeout=10,
+        )
+        if res.status_code != 200:
+            logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
+    except Exception as e:
+        logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
+
+
+def _notify_telegram_async(recipient, sender, subject, body, body_type, msg, email_id):
+    """把 Telegram 通知丢进后台线程，让 250 OK 尽快返回，减少发件方因超时而重发。"""
+    t = threading.Thread(
+        target=_send_telegram_notification,
+        args=(recipient, sender, subject, body, body_type, msg, email_id),
+        daemon=True,
+    )
+    t.start()
+
+
 def process_email_data(to_address, raw_email_data):
     msg = message_from_bytes(raw_email_data, policy=email_policy)
+    message_id = str(msg.get("Message-ID") or "").strip() or None
     subject = decode_mime_header_value(msg.get("Subject", "")).strip()
 
     spam_keywords = ["email tester !", "smtp test"]
@@ -468,10 +519,25 @@ def process_email_data(to_address, raw_email_data):
 
     conn = get_db_conn()
     try:
-        cursor = conn.execute(
-            "INSERT INTO received_emails (recipient, sender, subject, body, body_type) VALUES (?, ?, ?, ?, ?)",
-            (final_recipient, final_sender, subject, body, body_type),
-        )
+        # 幂等去重：发件方重发（SMTP 正常现象）时直接丢弃，不重复入库
+        if message_id:
+            dup_row = conn.execute(
+                "SELECT id FROM received_emails WHERE message_id = ?", (message_id,)
+            ).fetchone()
+            if dup_row:
+                logging.getLogger(__name__).info(
+                    f"跳过重复投递: Message-ID={message_id} 已存在 id={dup_row['id']}"
+                )
+                return
+        try:
+            cursor = conn.execute(
+                "INSERT INTO received_emails (recipient, sender, subject, body, body_type, message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (final_recipient, final_sender, subject, body, body_type, message_id),
+            )
+        except sqlite3.IntegrityError:
+            # 并发重复投递命中唯一索引：视为重复，直接返回（发件方收到 250）
+            logging.getLogger(__name__).info(f"跳过并发重复投递: Message-ID={message_id}")
+            return
         email_id = cursor.lastrowid
         for attachment in attachments:
             conn.execute(
@@ -488,40 +554,7 @@ def process_email_data(to_address, raw_email_data):
     finally:
         conn.close()
 
-    try:
-        from app.repositories.settings_repo import get_app_setting
-        import email.utils
-        
-        tg_enabled = get_app_setting("tg_enabled", "0")
-        tg_bot_token = get_app_setting("tg_bot_token")
-        tg_chat_id = get_app_setting("tg_chat_id")
-        tg_sender_format = get_app_setting("tg_sender_format", "full")
-        
-        if tg_enabled == "1" and tg_bot_token and tg_chat_id:
-            import requests
-                
-            sender_name, sender_addr = email.utils.parseaddr(final_sender)
-            if tg_sender_format == "name" and sender_name:
-                display_sender = sender_name
-            elif tg_sender_format == "email" and sender_addr:
-                display_sender = sender_addr
-            else:
-                display_sender = final_sender
+    _notify_telegram_async(final_recipient, final_sender, subject, body, body_type, msg, email_id)
 
-            telegram_body = get_telegram_body_source(body, body_type, msg)
-            telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
-            tg_text = build_telegram_mail_text(final_recipient, display_sender, subject, telegram_text_body, email_id=email_id)
-            message_url = f"https://api.telegram.org/bot{tg_bot_token}/sendMessage"
-            res = requests.post(
-                message_url,
-                json={"chat_id": tg_chat_id, "text": tg_text, "disable_web_page_preview": True},
-                timeout=10,
-            )
-            if res.status_code != 200:
-                import logging
-                logging.getLogger(__name__).error(f"Telegram文字通知响应错误: {res.text}")
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
 
     run_cleanup_if_needed()
