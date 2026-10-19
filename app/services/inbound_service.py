@@ -16,9 +16,8 @@ class CustomSMTPHandler:
             process_email_data(envelope.rcpt_tos, envelope.content)
             return "250 OK"
         except Exception as e:
-            logging.getLogger(__name__).error(f"处理邮件时发生严重错误: {e}")
+            logging.getLogger(__name__).exception(f"处理邮件时发生严重错误: {e}")
             return "500 Error processing message"
-
 
 
 def run_smtp_server(logger=None, hostname=None, port=None):
@@ -44,7 +43,12 @@ def run_smtp_server(logger=None, hostname=None, port=None):
     controller.start()
     logger.info(f"SMTP 服务器启动，监听端口 {port}...")
     try:
-        asyncio.get_event_loop().run_forever()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:

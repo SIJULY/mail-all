@@ -401,7 +401,7 @@ After=network.target
 Type=simple
 WorkingDirectory=${PROJECT_DIR}
 EnvironmentFile=${ENV_FILE}
-ExecStart=${VENV_DIR}/bin/gunicorn -w 2 -b 0.0.0.0:${WEB_PORT} app:app
+ExecStart=${VENV_DIR}/bin/gunicorn -w 2 --worker-class gthread --threads 4 --timeout 60 -b 0.0.0.0:${WEB_PORT} app:app
 Restart=always
 RestartSec=3
 
@@ -440,9 +440,13 @@ reload_and_start_services() {
 }
 
 configure_firewall() {
-  log "配置 UFW 防火墙..."
+  log "配置防火墙..."
   ufw allow "${WEB_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${SMTP_LISTEN_PORT_VALUE}/tcp" >/dev/null 2>&1 || true
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -C INPUT -p tcp --dport "${WEB_PORT}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${WEB_PORT}" -j ACCEPT 2>/dev/null || true
+    iptables -C INPUT -p tcp --dport "${SMTP_LISTEN_PORT_VALUE}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${SMTP_LISTEN_PORT_VALUE}" -j ACCEPT 2>/dev/null || true
+  fi
   ok "防火墙规则已放行端口 ${WEB_PORT} 和 ${SMTP_LISTEN_PORT_VALUE}。"
 }
 

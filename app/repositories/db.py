@@ -24,7 +24,7 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL)"
     )
     c.execute(
-        "CREATE TABLE IF NOT EXISTS received_emails (id INTEGER PRIMARY KEY, recipient TEXT, sender TEXT, subject TEXT, body TEXT, body_type TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, is_read BOOLEAN DEFAULT 0, is_deleted BOOLEAN DEFAULT 0, deleted_at DATETIME, is_starred BOOLEAN DEFAULT 0, is_important BOOLEAN DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS received_emails (id INTEGER PRIMARY KEY, recipient TEXT, sender TEXT, subject TEXT, body TEXT, body_type TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, is_read BOOLEAN DEFAULT 0, is_deleted BOOLEAN DEFAULT 0, deleted_at DATETIME, is_starred BOOLEAN DEFAULT 0, is_important BOOLEAN DEFAULT 0, message_id TEXT)"
     )
     c.execute(
         "CREATE TABLE IF NOT EXISTS received_email_attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL, filename TEXT, content_type TEXT, file_size INTEGER DEFAULT 0, content BLOB, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
@@ -106,6 +106,13 @@ def init_db():
     if "is_important" not in columns:
         cursor.execute("ALTER TABLE received_emails ADD COLUMN is_important BOOLEAN DEFAULT 0")
         conn.commit()
+    if "message_id" not in columns:
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN message_id TEXT")
+        conn.commit()
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_received_emails_message_id ON received_emails (message_id) WHERE message_id IS NOT NULL"
+    )
+    conn.commit()
 
     cursor.execute("PRAGMA table_info(managed_domains)")
     domain_columns = [row["name"] for row in cursor.fetchall()]
