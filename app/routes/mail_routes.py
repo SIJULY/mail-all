@@ -218,25 +218,6 @@ def register_mail_routes(app):
         if not recipient_mail:
             return jsonify({"error": "mail parameter is missing"}), 400
 
-        old_keywords = [
-            "verify your email address",
-            "验证您的电子邮件地址",
-            "e メールアドレスを検証してください",
-            "verification code",
-            "confirmation code",
-            "spacexai confirmation code",
-        ]
-        new_keywords = [
-            "chatgpt",
-            "openai",
-            "x.ai",
-            "spacexai",
-            "validate your email",
-            "validate your email address",
-            "creating a spacexai account",
-            "please use the code below",
-            "use the code below",
-        ]
         conn = get_db_conn()
         try:
             mail_variants = build_mail_search_variants(recipient_mail)
@@ -266,13 +247,13 @@ def register_mail_routes(app):
                 """,
                 params + priority_params,
             ).fetchall()
-            for msg in messages:
-                subject = (msg["subject"] or "").lower().strip()
-                body = (msg["body"] or "").lower()
-                match_old = any(subject.startswith(k) for k in old_keywords)
-                match_new = any(k in subject for k in new_keywords) or any(k in body for k in new_keywords)
-                if match_old or match_new:
-                    return Response(msg["body"], mimetype=f"{msg['body_type'] or 'text/html'}; charset=utf-8")
+            # 不再做关键词过滤：结果已按“收件人精确匹配优先、id 倒序”排列，
+            # 第一封就是该邮箱最新一封邮件，直接返回其正文。
+            # 旧逻辑只放行 ChatGPT/OpenAI/x.ai 等写死关键词，AWS 等其他站点
+            # 的验证邮件即便已入库也会被过滤成 404（2026-10-22 实测）。
+            if messages:
+                msg = messages[0]
+                return Response(msg["body"], mimetype=f"{msg['body_type'] or 'text/html'}; charset=utf-8")
             return jsonify({"error": "Verification email not found"}), 404
         finally:
             conn.close()
