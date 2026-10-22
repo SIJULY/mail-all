@@ -12,6 +12,8 @@ APP_DIR_DEST="${PROJECT_DIR}/app"
 REQ_DEST="${PROJECT_DIR}/requirements.txt"
 README_DEST="${PROJECT_DIR}/README.md"
 REPO_RAW_BASE="https://raw.githubusercontent.com/SIJULY/mail-all/main"
+REPO_TARBALL_URL="https://codeload.github.com/SIJULY/mail-all/tar.gz/refs/heads/main"
+STAGED_SOURCE_DIR=""
 SERVICE_WEB="mail-api-web.service"
 SERVICE_SMTP="mail-api-smtp.service"
 ENV_FILE="${PROJECT_DIR}/mail_api.env"
@@ -225,43 +227,72 @@ create_project_dir() {
   mkdir -p "${PROJECT_DIR}"
 }
 
-prepare_app_source() {
-  mkdir -p "${PROJECT_DIR}"
-  rm -rf "${APP_DIR_DEST}"
-
-  if [ -f "${APP_SOURCE}" ] && [ -d "${APP_DIR_SOURCE}" ]; then
-    log "检测到当前目录存在拆分版项目，使用本地文件。"
-    cp -f "${APP_SOURCE}" "${APP_DEST}"
-    cp -a "${APP_DIR_SOURCE}" "${APP_DIR_DEST}"
-    [ -f "${REQ_SOURCE}" ] && cp -f "${REQ_SOURCE}" "${REQ_DEST}"
-    [ -f "${README_SOURCE}" ] && cp -f "${README_SOURCE}" "${README_DEST}"
-    ok "已复制本地拆分版项目到 ${PROJECT_DIR}"
+# 在动现有安装（备份、停服务、删旧代码）之前，先把新代码准备好：
+# - 当前目录已有完整项目就直接用本地文件，不联网；
+# - 否则一次性下载整个仓库压缩包到临时目录并校验完整性。
+# 旧做法逐个 curl 33 个文件且没有任何超时，单个连接卡住就会无限挂起，
+# 而且此时服务已停、旧 app 目录已删，现场只剩半截安装（2026-10-22 实测）。
+stage_app_source() {
+  if [ -n "${STAGED_SOURCE_DIR}" ]; then
     return
   fi
 
-  warn "当前目录未找到完整拆分版项目，尝试从 GitHub 下载..."
-  curl -fsSL "${REPO_RAW_BASE}/app.py" -o "${APP_DEST}"
-  curl -fsSL "${REPO_RAW_BASE}/requirements.txt" -o "${REQ_DEST}"
-  curl -fsSL "${REPO_RAW_BASE}/README.md" -o "${README_DEST}" || true
+  if [ -f "${APP_SOURCE}" ] && [ -d "${APP_DIR_SOURCE}" ]; then
+    STAGED_SOURCE_DIR="."
+    log "检测到当前目录存在拆分版项目，将使用本地文件。"
+    return
+  fi
 
-  mkdir -p "${APP_DIR_DEST}"
-  for rel in \
-    "app/__init__.py" "app/config.py" "app/constants.py" \
-    "app/repositories/__init__.py" "app/repositories/auth_repo.py" "app/repositories/db.py" "app/repositories/mail_repo.py" "app/repositories/settings_repo.py" \
-    "app/routes/__init__.py" "app/routes/admin_routes.py" "app/routes/api_routes.py" "app/routes/mail_routes.py" "app/routes/moemail_routes.py" "app/routes/ui_routes.py" \
-    "app/services/__init__.py" "app/services/auth_service.py" "app/services/cleanup_service.py" "app/services/inbound_service.py" "app/services/message_service.py" "app/services/settings_service.py" "app/services/smtp_service.py" "app/services/view_service.py" \
-    "app/ui/__init__.py" "app/ui/html_pages.py" "app/ui/page_builders.py" "app/ui/sender_display.py" \
-    "app/utils/__init__.py" "app/utils/decorators.py" "app/utils/mail_utils.py" "app/utils/response.py" "app/utils/text_utils.py" "app/utils/time_utils.py"; do
-    mkdir -p "${PROJECT_DIR}/$(dirname "$rel")"
-    curl -fsSL "${REPO_RAW_BASE}/$rel" -o "${PROJECT_DIR}/$rel"
-  done
-
-  if [ ! -f "${PROJECT_DIR}/app/ui/sender_display.py" ]; then
-    err "GitHub 下载不完整：缺少 app/ui/sender_display.py"
+  warn "当前目录未找到完整拆分版项目，正在从 GitHub 一次性下载整包..."
+  local stage_dir
+  stage_dir="$(mktemp -d)"
+  # 带连接/低速/总超时和重试：网络卡死时会在几分钟内明确失败，不再无限挂起
+  if ! curl -fL --progress-bar \
+      --connect-timeout 15 --speed-limit 1024 --speed-time 30 --max-time 600 \
+      --retry 3 --retry-all-errors --retry-delay 5 \
+      "${REPO_TARBALL_URL}" -o "${stage_dir}/repo.tar.gz"; then
+    rm -rf "${stage_dir}"
+    err "从 GitHub 下载仓库失败，已中止：现有安装未做任何改动，可稍后重试。"
     exit 1
   fi
 
-  ok "已从 GitHub 下载拆分版项目到 ${PROJECT_DIR}"
+  mkdir -p "${stage_dir}/src"
+  tar -xzf "${stage_dir}/repo.tar.gz" -C "${stage_dir}/src" --strip-components=1
+
+  local rel
+  for rel in "app.py" "requirements.txt" "app/__init__.py" "app/routes/mail_routes.py" "app/ui/sender_display.py"; do
+    if [ ! -f "${stage_dir}/src/${rel}" ]; then
+      rm -rf "${stage_dir}"
+      err "GitHub 下载不完整：缺少 ${rel}，已中止，现有安装未做任何改动。"
+      exit 1
+    fi
+  done
+
+  STAGED_SOURCE_DIR="${stage_dir}/src"
+  ok "新代码已下载并校验完整（临时目录 ${stage_dir}），接下来才会动现有安装。"
+}
+
+prepare_app_source() {
+  stage_app_source
+
+  mkdir -p "${PROJECT_DIR}"
+  rm -rf "${APP_DIR_DEST}"
+
+  cp -f "${STAGED_SOURCE_DIR}/app.py" "${APP_DEST}"
+  cp -a "${STAGED_SOURCE_DIR}/app" "${APP_DIR_DEST}"
+  [ -f "${STAGED_SOURCE_DIR}/requirements.txt" ] && cp -f "${STAGED_SOURCE_DIR}/requirements.txt" "${REQ_DEST}"
+  [ -f "${STAGED_SOURCE_DIR}/README.md" ] && cp -f "${STAGED_SOURCE_DIR}/README.md" "${README_DEST}"
+
+  if [ ! -f "${PROJECT_DIR}/app/ui/sender_display.py" ]; then
+    err "代码复制不完整：缺少 app/ui/sender_display.py"
+    exit 1
+  fi
+
+  if [ "${STAGED_SOURCE_DIR}" = "." ]; then
+    ok "已复制本地拆分版项目到 ${PROJECT_DIR}"
+  else
+    ok "已从 GitHub 下载拆分版项目到 ${PROJECT_DIR}"
+  fi
 }
 
 setup_venv() {
@@ -657,6 +688,7 @@ update_flow() {
   DB_FILE_VALUE="${EXISTING_DB_FILE_BASENAME}"
   LAST_CLEANUP_FILE_VALUE="${EXISTING_LAST_CLEANUP_BASENAME}"
 
+  stage_app_source
   backup_existing_install
   cleanup_legacy_mail_services
   create_project_dir
@@ -675,6 +707,7 @@ update_flow() {
 }
 
 reinstall_flow() {
+  stage_app_source
   backup_existing_install
   cleanup_legacy_mail_services
   create_project_dir
@@ -688,6 +721,7 @@ reinstall_flow() {
 }
 
 fresh_flow() {
+  stage_app_source
   if [ -d "${PROJECT_DIR}" ]; then
     warn "注意：全新安装将清空现有的所有配置和数据库！"
     read -rp "确定要继续吗？(输入 yes 确认): " confirm
