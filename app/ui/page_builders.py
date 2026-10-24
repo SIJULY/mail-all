@@ -519,7 +519,7 @@ def render_email_list_page(
 .help-tooltip { position: relative; cursor: help; color: #94a3b8; display: inline-flex; }
 .tooltip-content {
     position: absolute;
-    top: 100%; right: 0;
+    top: 100%; left: 50%; transform: translateX(-50%);
     margin-top: 8px;
     background: rgba(15, 23, 42, 0.95);
     color: #fff;
@@ -529,14 +529,16 @@ def render_email_list_page(
     line-height: 1.6;
     white-space: pre-wrap;
     width: max-content;
-    max-width: 320px;
-    z-index: 1000;
+    max-width: 380px;
+    z-index: 9999;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.2s 0.1s, visibility 0.2s 0.1s;
     user-select: text; /* allow text selection */
 }
+.domain-form-card { overflow: visible !important; }
+.domain-form-card .smtp-field.full { grid-column: auto; }
 .tooltip-content::before {
     content: '';
     position: absolute;
