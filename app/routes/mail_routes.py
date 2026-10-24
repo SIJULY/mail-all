@@ -149,6 +149,11 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
             "tg_recipient_format": get_app_setting("tg_recipient_format", "show"),
             "tg_enabled": get_app_setting("tg_enabled", "1")
         }
+
+        from app.services.spam_filter_service import get_all_spam_rules, RULE_TYPES
+        system_modal_data["spam_rules"] = get_all_spam_rules()
+        system_modal_data["spam_rule_types"] = RULE_TYPES
+
         mail_api_data = {
             "key": get_app_setting("mail_api_key", ""),
             "enabled": get_app_setting("mail_api_enabled", "1") == "1",

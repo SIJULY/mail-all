@@ -441,6 +441,13 @@ def process_email_data(to_address, raw_email_data):
         if keyword in subject_lower:
             return
 
+    # 用户自定义反垃圾规则检查
+    pre_sender = decode_mime_header_value(str(msg.get("From", ""))).strip()
+    from app.services.spam_filter_service import is_spam
+    if is_spam(pre_sender, subject):
+        logging.getLogger(__name__).info(f"反垃圾规则拦截: sender={pre_sender}, subject={subject}")
+        return
+
     final_recipient = resolve_inbound_recipient(msg, to_address)
 
     final_sender = None

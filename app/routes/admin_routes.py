@@ -4,7 +4,7 @@ import html
 import secrets
 import requests
 
-from flask import flash, redirect, request, send_file, session, url_for
+from flask import flash, jsonify, redirect, request, send_file, session, url_for
 from werkzeug.security import generate_password_hash
 
 from app.repositories.auth_repo import add_user, delete_user, get_user_by_email, sqlite3
@@ -563,6 +563,49 @@ def register_admin_routes(app):
     """
         success, message = send_email_via_smtp_config(test_recipient, subject, text_body, html_body, cfg)
         flash(message, "success" if success else "error")
+        return redirect(url_for("admin_system"))
+
+    @app.route("/manage_spam_rules", methods=["POST"])
+    @login_required
+    @admin_required
+    def manage_spam_rules():
+        from app.services.spam_filter_service import add_spam_rule, delete_spam_rule
+
+        action = request.form.get("action")
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        try:
+            if action == "add":
+                rule_type = (request.form.get("rule_type") or "").strip()
+                rule_value = (request.form.get("rule_value") or "").strip()
+                if not rule_type or not rule_value:
+                    raise ValueError("规则类型和规则值不能为空")
+                add_spam_rule(rule_type, rule_value)
+                if is_ajax:
+                    return jsonify({"success": True, "message": "规则已添加"})
+                flash("反垃圾规则已添加", "success")
+
+            elif action == "delete":
+                rule_id = request.form.get("rule_id", type=int)
+                if rule_id:
+                    delete_spam_rule(rule_id)
+                if is_ajax:
+                    return jsonify({"success": True, "message": "规则已删除"})
+                flash("反垃圾规则已删除", "success")
+
+            else:
+                raise ValueError("未知的操作类型")
+
+        except ValueError as e:
+            if is_ajax:
+                return jsonify({"success": False, "message": str(e)}), 400
+            flash(str(e), "error")
+        except Exception as e:
+            app.logger.error(f"反垃圾规则操作失败: {e}")
+            if is_ajax:
+                return jsonify({"success": False, "message": f"操作失败: {e}"}), 500
+            flash(f"操作失败: {e}", "error")
+
         return redirect(url_for("admin_system"))
 
     @app.route("/manage_system_settings", methods=["POST"])

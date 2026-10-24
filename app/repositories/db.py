@@ -209,4 +209,16 @@ def init_db():
     )
     conn.commit()
 
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS spam_filter_rules (
+            id INTEGER PRIMARY KEY,
+            rule_type TEXT NOT NULL,
+            rule_value TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+
     conn.close()
