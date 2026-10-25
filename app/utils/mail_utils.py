@@ -777,14 +777,17 @@ def _serialize_quote_node(node) -> str:
     return f"<{node.tag}{attrs}>{inner}</{node.tag}>"
 
 
-def _inline_quoted_styles(content: str, css_blocks) -> str:
-    """把样式块规则转成内联 style：失败时原样返回，绝不阻塞转发。"""
+def _inline_quoted_styles(content: str, css_blocks):
+    """把样式块规则转成内联 style，并把 class/id 重命名为 q- 前缀。
+
+    返回 (内容, 是否成功)。重命名是为了后续样式隔离：q- 前缀的类名不会
+    跟写信页本身的类名（如 .main）撞车。失败时原样返回并标记失败，
+    调用方此时不得放行 class/id、也不得保留样式块，绝不阻塞转发。
+    """
     try:
         rules = []
         for block in css_blocks:
             rules.extend(_parse_css_rules(block))
-        if not rules:
-            return content
         parser = _QuoteTreeParser()
         parser.feed(content)
         elements = list(_iter_quote_elements(parser.root))
@@ -803,24 +806,144 @@ def _inline_quoted_styles(content: str, css_blocks) -> str:
                         merged.update(dict(parsed))
                         rule_styles[id(element)] = list(merged.items())
         for element in elements:
-            if id(element) not in rule_styles:
-                continue
-            final = dict(rule_styles[id(element)])
-            final.update(dict(_parse_style_declarations(element.attrs.get("style", ""))))
-            element.attrs["style"] = "; ".join(f"{k}: {v}" for k, v in final.items())
-        return "".join(_serialize_quote_node(child) for child in parser.root.children)
+            if id(element) in rule_styles:
+                final = dict(rule_styles[id(element)])
+                final.update(dict(_parse_style_declarations(element.attrs.get("style", ""))))
+                element.attrs["style"] = "; ".join(f"{k}: {v}" for k, v in final.items())
+            if element.attrs.get("class"):
+                element.attrs["class"] = " ".join(
+                    f"q-{token}" for token in element.attrs["class"].split() if token
+                )
+            if element.attrs.get("id"):
+                element.attrs["id"] = f"q-{element.attrs['id']}"
+        return "".join(_serialize_quote_node(child) for child in parser.root.children), True
     except Exception:
-        return content
+        return content, False
+
+
+def _rename_selector_tokens(selector: str) -> str:
+    """选择器里的 .class / #id 同步改成 q- 前缀，与树里的重命名对应。"""
+    selector = re.sub(r"\.([A-Za-z_-][\w-]*)", r".q-\1", selector)
+    selector = re.sub(r"#([A-Za-z_-][\w-]*)", r"#q-\1", selector)
+    return selector
+
+
+def _scope_selector(selector: str):
+    """把一条选择器收窄到引用容器内；返回 None 表示该规则直接丢弃。"""
+    selector = _rename_selector_tokens(selector.strip())
+    if not selector or selector.startswith(".mail-quote-original"):
+        return selector or None
+    m = re.match(r"^(html|body)\b", selector)
+    if m:
+        return ".mail-quote-original" + selector[m.end():]
+    if selector.startswith(":root"):
+        return ".mail-quote-original" + selector[len(":root"):]
+    if selector == "*" or selector.startswith("* ") or selector.startswith("*>"):
+        return ".mail-quote-original *" + selector[1:]
+    return f".mail-quote-original {selector}"
+
+
+def _scope_rule_block(selectors: str, declarations: str):
+    """一条普通规则的隔离版：选择器加前缀，声明过一遍白名单过滤。"""
+    filtered = _filter_style_declarations(declarations)
+    if not filtered:
+        return None
+    scoped = []
+    for selector in selectors.split(","):
+        scoped_selector = _scope_selector(selector)
+        if scoped_selector:
+            scoped.append(scoped_selector)
+    if not scoped:
+        return None
+    return f"{', '.join(scoped)} {{ {filtered} }}"
+
+
+def _scope_quoted_css(css_blocks) -> str:
+    """把样式块隔离成只作用于引用容器的 CSS，失败或无内容时返回空串。
+
+    保留 @font-face（字体名本身是唯一的，不会污染页面字体）和 @media
+    里的规则（移动端/深色模式按容器内生效）；@import/@keyframes 等其他
+    @ 规则一律丢弃。任一规则解析失败只丢该规则，不影响其余规则。
+    """
+    out = []
+    for block in css_blocks:
+        text = re.sub(r"/\*.*?\*/", "", block or "", flags=re.S)
+        i, n = 0, len(text)
+        while i < n:
+            while i < n and text[i] in " \t\r\n;":
+                i += 1
+            if i >= n:
+                break
+            if text[i] == "@":
+                header_end = text.find("{", i)
+                semi = text.find(";", i)
+                if header_end == -1 or (semi != -1 and semi < header_end):
+                    i = semi + 1 if semi != -1 else n
+                    continue
+                header_raw = text[i:header_end].strip()
+                header = header_raw.lower()
+                depth, j = 1, header_end + 1
+                while j < n and depth:
+                    if text[j] == "{":
+                        depth += 1
+                    elif text[j] == "}":
+                        depth -= 1
+                    j += 1
+                inner = text[header_end + 1:j - 1] if j > header_end + 1 else ""
+                i = j
+                if header.startswith("@font-face"):
+                    kept = []
+                    for prop, value in _parse_style_declarations(inner):
+                        if prop not in ("font-family", "src", "font-weight", "font-style", "font-display", "unicode-range"):
+                            continue
+                        if "javascript:" in value.lower() or "vbscript:" in value.lower():
+                            continue
+                        kept.append(f"{prop}: {value}")
+                    if kept:
+                        out.append(f"@font-face {{ {'; '.join(kept)} }}")
+                elif header.startswith("@media"):
+                    query = header_raw[len("@media"):].strip()
+                    inner_rules = []
+                    # 内层只按普通规则解析，不再嵌套 @ 规则。
+                    for selectors, declarations in _parse_css_rules(inner):
+                        scoped = _scope_rule_block(selectors, declarations)
+                        if scoped:
+                            inner_rules.append(scoped)
+                    if query and inner_rules:
+                        out.append(f"@media {query} {{ {' '.join(inner_rules)} }}")
+                continue
+            brace = text.find("{", i)
+            if brace == -1:
+                break
+            selectors = text[i:brace].strip()
+            depth, j = 1, brace + 1
+            while j < n and depth:
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                j += 1
+            declarations = text[brace + 1:j - 1] if j > brace + 1 else ""
+            i = j
+            if selectors and declarations.strip():
+                scoped = _scope_rule_block(selectors, declarations)
+                if scoped:
+                    out.append(scoped)
+    return "\n".join(out)
 
 
 def sanitize_quoted_html(html_content: str) -> str:
     """清洗回复/转发时引用的原邮件 HTML，使其可安全嵌入写信编辑器。
 
-    目标是“引用后排版尽量不变”：表格、图片、内联样式都保留；样式块
-    里的规则先转成内联样式再删块（直接留 <style> 会污染写信页本身的
-    样式，上一轮修 CSS 外泄时已证实 bleach 只剥标签不删内容）。最后仍
-    由 bleach 白名单把关：script/style/事件属性/class/id/定位样式一律
-    不进结果，未安装 bleach 时降级为全文转义。
+    目标是“引用后排版尽量接近原信”：表格、图片、内联样式都保留；
+    样式块一律不直接留——先转成内联样式做兜底，再把样式块隔离成只
+    作用于引用容器的 CSS（选择器加 .mail-quote-original 前缀，类名
+    同步改成 q- 前缀，避免跟写信页本身的类名撞车），连同字体和媒体
+    查询一起保留。这样原信的字体、深色模式、移动端规则在引用里仍
+    生效，又不会污染写信页。最后仍由 bleach 白名单把关：script、
+    事件属性、定位样式一律不进结果；内联转换失败时不放行 class/id、
+    也不保留样式块，直接退回上一轮的安全版。未安装 bleach 时降级为
+    全文转义。
     """
     content = html_content or ""
     css_blocks = re.findall(r"<style\b[^>]*>(.*?)</style\s*>", content, flags=re.I | re.S)
@@ -828,12 +951,20 @@ def sanitize_quoted_html(html_content: str) -> str:
     content = re.sub(r"<head\b[^>]*>.*?</head\s*>", "", content, flags=re.I | re.S)
     content = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", content, flags=re.I | re.S)
     content = re.sub(r"<script\b[^>]*>.*?</script\s*>", "", content, flags=re.I | re.S)
-    content = _inline_quoted_styles(content, css_blocks)
+    content, inline_ok = _inline_quoted_styles(content, css_blocks)
+    scoped_css = _scope_quoted_css(css_blocks) if inline_ok else ""
     content = _protect_style_attributes(content)
     try:
         import bleach
     except ImportError:
         return html.escape(content)
+    star_attrs = ["title", "data-qstyle", "align", "valign", "width",
+                  "height", "bgcolor", "border", "cellpadding", "cellspacing",
+                  "colspan", "rowspan", "color", "face", "size"]
+    if scoped_css:
+        # 只有内联转换成功时，内容里的 class/id 才全是 q- 前缀，
+        # 此时放行它们才安全；否则一律不放行。
+        star_attrs = star_attrs + ["class", "id"]
     cleaned = bleach.clean(
         content,
         tags=[
@@ -845,15 +976,16 @@ def sanitize_quoted_html(html_content: str) -> str:
         attributes={
             "a": ["href", "target"],
             "img": ["src", "alt"],
-            "*": ["title", "data-qstyle", "align", "valign", "width",
-                  "height", "bgcolor", "border", "cellpadding", "cellspacing",
-                  "colspan", "rowspan", "color", "face", "size"],
+            "*": star_attrs,
         },
         protocols=["http", "https", "mailto"],
         strip=True,
         strip_comments=True,
     )
-    return _restore_style_attributes(cleaned)
+    cleaned = _restore_style_attributes(cleaned)
+    if scoped_css:
+        return f"<style>{scoped_css}</style><div class=\"mail-quote-original\">{cleaned}</div>"
+    return cleaned
 
 
 
