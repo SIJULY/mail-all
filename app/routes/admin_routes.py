@@ -63,6 +63,31 @@ def register_admin_routes(app):
                 conn.close()
         return redirect(request.referrer or url_for("admin_view"))
 
+    @app.route("/mark_read_selected_emails", methods=["POST"])
+    @login_required
+    @admin_required
+    def mark_read_selected_emails():
+        from app.repositories.db import get_db_conn
+
+        selected_ids = request.form.getlist("selected_ids")
+        if selected_ids:
+            conn = get_db_conn()
+            try:
+                placeholders = ",".join("?" for _ in selected_ids)
+                unread_count = conn.execute(
+                    f"SELECT COUNT(*) FROM received_emails WHERE id IN ({placeholders}) AND ifnull(is_read, 0) = 0 AND ifnull(is_deleted, 0) = 0",
+                    selected_ids,
+                ).fetchone()[0]
+                conn.execute(
+                    f"UPDATE received_emails SET is_read = 1 WHERE id IN ({placeholders}) AND ifnull(is_deleted, 0) = 0",
+                    selected_ids,
+                )
+                conn.commit()
+                flash(f"已将 {unread_count} 封未读邮件标为已读", "success")
+            finally:
+                conn.close()
+        return redirect(request.referrer or url_for("admin_view"))
+
     @app.route("/delete_email/<int:email_id>", methods=["POST"])
     @login_required
     def delete_single_email(email_id):
