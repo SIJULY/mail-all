@@ -90,6 +90,75 @@ def register_ui_routes(app):
         conn.close()
         return jsonify({"unread_count": count})
 
+    @app.route("/api/translate_email", methods=["POST"])
+    @login_required
+    def translate_email():
+        """详情页手动翻译：只在用户点翻译按钮时调用，内容发给 Google
+        免费接口（无需 Key），不自动翻译、不存翻译结果。管理员可翻任意
+        邮件，普通用户只能翻投递给自己的邮件；已发送邮件同样可翻。"""
+        from app.repositories.db import get_db_conn
+        from app.services.translation_service import (
+            TranslationRateLimited,
+            translate_mail_body,
+            translate_text,
+        )
+
+        data = request.get_json(silent=True) or {}
+        email_id = data.get("email_id")
+        try:
+            email_id = int(email_id)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "邮件 ID 无效"}), 400
+        conn = get_db_conn()
+        try:
+            row = None
+            if session.get("is_admin"):
+                row = conn.execute(
+                    "SELECT subject, body, body_type FROM received_emails WHERE id = ? AND ifnull(is_deleted, 0) = 0",
+                    (email_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT subject, body, body_type FROM received_emails WHERE id = ? AND recipient = ? AND ifnull(is_deleted, 0) = 0",
+                    (email_id, session.get("user_email")),
+                ).fetchone()
+            if row is None:
+                # 已发送邮件：按发件人归属查，管理员看全部。
+                if session.get("is_admin"):
+                    row = conn.execute(
+                        "SELECT subject, body, body_type FROM sent_emails WHERE id = ?",
+                        (email_id,),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT subject, body, body_type FROM sent_emails WHERE id = ? AND lower(trim(owner_email)) = lower(trim(?))",
+                        (email_id, session.get("user_email") or ""),
+                    ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return jsonify({"ok": False, "error": "邮件不存在或无权查看"}), 404
+        try:
+            translated_body, already_chinese, detected = translate_mail_body(
+                row["body"] or "", row["body_type"] or "text/plain", target="zh-CN"
+            )
+            translated_subject = row["subject"] or ""
+            if not already_chinese and translated_subject.strip():
+                translated_subject, _ = translate_text(translated_subject, target="zh-CN")
+        except TranslationRateLimited as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 429
+        except Exception as exc:
+            app.logger.error(f"翻译邮件失败: {exc}")
+            return jsonify({"ok": False, "error": "翻译服务暂时不可用，请稍后再试"}), 502
+        return jsonify({
+            "ok": True,
+            "already_chinese": already_chinese,
+            "detected_lang": detected,
+            "translated_subject": translated_subject,
+            "translated_body": translated_body,
+            "translated_body_type": row["body_type"] or "text/plain",
+        })
+
     @app.route("/view")
     @login_required
     def view_emails():
