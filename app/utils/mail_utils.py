@@ -383,6 +383,89 @@ def focus_preview_around_code(text, code=None, context_chars=900):
     return text
 
 
+_URL_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_\-+/=.%~&?#;]+$")
+
+
+def strip_urls_for_telegram_preview(text: str) -> str:
+    """Telegram 通知专用：把正文里的超链接折掉，只留链接文字。
+
+    适用所有正文来源（HTML 去标签后、纯文本原样），不只修某一封：
+    - ``文字 <https://…>``、``文字 (https://…)``、``[文字](https://…)`` 只留文字；
+    - 裸网址、www. 开头的网址整段去掉；
+    - 营销邮件纯文本版常把长跟踪链接折行，后续那些无空格的长 token 行
+      （base64/跟踪参数续行）也一并去掉，否则只去第一行、续行还是一堆乱码；
+    - 去网址后只剩 ``My Account:`` 这类空标签的行也去掉。
+    链接本身不丢失：通知末尾的“完整邮件”链接仍指向网页版原文。
+    邮箱地址、验证码、普通句子不受影响（只匹配 http(s):// 和 www.）。
+    """
+    if not text:
+        return ""
+    normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    # Markdown 链接先折成文字，避免括号里的网址被当成正文。
+    normalized = re.sub(r"\[([^\]]+)\]\([^)]*https?://[^)]*\)", r"\1", normalized, flags=re.I)
+
+    lines = normalized.split("\n")
+    kept = []
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
+        line = raw_line.strip()
+        had_url = False
+
+        def _remove_url(match):
+            nonlocal had_url
+            had_url = True
+            return ""
+
+        # 尖括号、圆括号里的网址整段去掉。
+        line = re.sub(r"<https?://[^>\s]+>", _remove_url, line, flags=re.I)
+        line = re.sub(r"\(https?://[^)\s]+\)", _remove_url, line, flags=re.I)
+        # 裸网址、www. 网址。
+        line = re.sub(r"https?://\S+", _remove_url, line, flags=re.I)
+        line = re.sub(r"(?<![A-Za-z0-9])www\.\S+", _remove_url, line, flags=re.I)
+        line = re.sub(r"\s+([，。；：！？,.;:!?])", r"\1", line).strip()
+        line = re.sub(r"^[<>]+|[<>]+$", "", line).strip()
+        line = re.sub(r"\(\s*\)", "", line).strip()
+
+        if had_url:
+            # 去网址后只剩一个空标签（如 My Account:），整行不要。
+            if re.fullmatch(r"[^:]{1,40}:", line):
+                i += 1
+                # 标签行后面的折行续行同样是网址碎片，一并跳过。
+                while i < len(lines):
+                    nxt = lines[i].strip()
+                    if nxt and " " not in nxt and len(nxt) >= 20 and _URL_SAFE_TOKEN.match(nxt) and "@" not in nxt:
+                        i += 1
+                        continue
+                    break
+                continue
+            kept.append(line)
+            i += 1
+            # 刚去过的长网址若在原文里被折行，后续无空格的长 token 行是它的续行。
+            while i < len(lines):
+                nxt = lines[i].strip()
+                if nxt and " " not in nxt and len(nxt) >= 20 and _URL_SAFE_TOKEN.match(nxt) and "@" not in nxt:
+                    i += 1
+                    continue
+                break
+            continue
+
+        kept.append(line)
+        i += 1
+
+    # 压掉多余空行，保留段落分隔。
+    out_lines = []
+    for line in kept:
+        if not line:
+            if out_lines and out_lines[-1] != "":
+                out_lines.append("")
+            continue
+        out_lines.append(line)
+    while out_lines and out_lines[-1] == "":
+        out_lines.pop()
+    return "\n".join(out_lines).strip()
+
+
 def strip_tags_for_telegram_preview(html_content):
     """把 HTML 邮件转换成适合 Telegram 通知的纯文本，保留必要换行。"""
     if not html_content:

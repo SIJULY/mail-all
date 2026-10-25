@@ -17,7 +17,7 @@ from app.config import PUBLIC_BASE_URL, SERVER_PUBLIC_IP, SPECIAL_VIEW_TOKEN
 from app.repositories.db import get_db_conn
 from app.repositories.mail_repo import get_managed_mailbox_by_email, resolve_inbound_mailbox_address
 from app.services.cleanup_service import run_cleanup_if_needed
-from app.utils.mail_utils import strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview
+from app.utils.mail_utils import strip_forwarded_headers_for_preview, strip_tags_for_telegram_preview, strip_urls_for_telegram_preview
 
 
 def serialize_moemail_message(row) -> Dict[str, str]:
@@ -117,10 +117,16 @@ def _normalize_telegram_text_body(body: str, body_type: str) -> str:
         text = strip_tags_for_telegram_preview(body)
     else:
         text = str(body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    # 最后统一折掉所有超链接：HTML 路径之前只去标签、不去纯文本版里的网址，
+    # 纯文本路径之前根本不去网址；这里是 Telegram 发送前的最后一道，两种来源都覆盖。
+    text = strip_urls_for_telegram_preview(text)
     text = re.sub(r"[\t \f\v\u00a0]+", " ", text)
     text = re.sub(r"(?m)^\s*>+\s?", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
+        if str(body or "").strip():
+            # 正文不是空，只是全是链接：别谎称空，指向完整邮件。
+            return "（正文仅含链接，详见完整邮件）"
         return "（邮件正文为空）"
     return text
 
