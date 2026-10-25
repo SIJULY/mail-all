@@ -118,8 +118,8 @@ def build_mail_query_context(is_admin_view, recipient_override=None, nav_mode="i
     elif is_admin_view:
         where_clauses.append("ifnull(is_deleted, 0) = 1" if is_trash_view else "ifnull(is_deleted, 0) = 0")
         if search_query:
-            where_clauses.append("(subject LIKE ? OR recipient LIKE ? OR sender LIKE ? OR body LIKE ?)")
-            params.extend([f"%{search_query}%"] * 4)
+            where_clauses.append("(subject LIKE ? OR recipient LIKE ? OR original_recipient LIKE ? OR sender LIKE ? OR body LIKE ?)")
+            params.extend([f"%{search_query}%"] * 5)
     else:
         where_clauses.append("recipient = ?")
         params.append(session["user_email"])

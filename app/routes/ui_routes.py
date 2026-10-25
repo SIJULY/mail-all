@@ -45,6 +45,33 @@ def register_ui_routes(app):
         finally:
             conn.close()
 
+    @app.route("/api/latest_email")
+    @login_required
+    def latest_email():
+        """详情页新邮件弹窗的轻量轮询接口：只返回当前视野最新一封的 id/发件人/主题。
+
+        管理员看全局最新，非管理员只看自己投递邮箱的最新；回收站里的不算。
+        不返回正文，不改已读状态，正在读的邮件不会被这次轮询打断。
+        """
+        from app.repositories.db import get_db_conn
+
+        conn = get_db_conn()
+        try:
+            if session.get("is_admin"):
+                row = conn.execute(
+                    "SELECT id, sender, subject FROM received_emails WHERE ifnull(is_deleted, 0) = 0 ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id, sender, subject FROM received_emails WHERE recipient = ? AND ifnull(is_deleted, 0) = 0 ORDER BY id DESC LIMIT 1",
+                    (session.get("user_email"),),
+                ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return jsonify({"id": None})
+        return jsonify({"id": row["id"], "sender": row["sender"] or "", "subject": row["subject"] or ""})
+
     @app.route("/api/unread_count")
     @login_required
     def unread_count():

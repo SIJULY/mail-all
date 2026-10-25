@@ -172,10 +172,14 @@ def _truncate_telegram_body_for_single_message(body: str, max_chars: int) -> str
 
 
 
-def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str, email_id=None, max_chars: int = 3900) -> str:
+def build_telegram_mail_text(recipient: str, sender: str, subject: str, body: str, email_id=None, max_chars: int = 3900, original_recipient: str = "") -> str:
+    original_line = ""
+    if original_recipient and original_recipient.strip().lower() != (recipient or "").strip().lower():
+        original_line = f"原始收件人: {original_recipient}\n"
     header = (
         "📧 收到新邮件\n\n"
         f"收件人: {recipient or ''}\n"
+        f"{original_line}"
         f"发件人: {sender or ''}\n"
         f"主题: {subject or ''}\n\n"
     )
@@ -381,7 +385,24 @@ def resolve_inbound_recipient(message: Message, to_address) -> str:
 
 
 
-def _send_telegram_notification(recipient, sender, subject, body, body_type, msg, email_id):
+def extract_original_recipient(message: Message, final_recipient: str, envelope_candidates) -> str:
+    """从信头里找出转发前的原始收件人。
+
+    转发场景：信封地址（RCPT TO）是本邮局的投递邮箱，信头 To / X-Original-To /
+    Delivered-To 里往往还留着转发前的地址。只取第一个既不在信封地址里、
+    又不等于最终投递邮箱的地址；直投邮件的 To 就是投递邮箱本身，返回空，
+    表示没有“原始收件人”这一说，避免把群发里的其他收件人误标成原始收件人。
+    """
+    envelope_set = {addr.strip().lower() for addr in _normalize_recipient_candidates(envelope_candidates)}
+    final = (final_recipient or "").strip().lower()
+    for header_name in ["To", "X-Original-To", "Delivered-To", "X-Forwarded-To", "Resent-To"]:
+        for candidate in _normalize_recipient_candidates(message.get_all(header_name, [])):
+            if candidate and candidate != final and candidate not in envelope_set:
+                return candidate
+    return ""
+
+
+def _send_telegram_notification(recipient, sender, subject, body, body_type, msg, email_id, original_recipient=""):
     """后台线程发送 Telegram 通知。失败只记日志，不影响投递确认（250 OK 先回）。"""
     try:
         from app.repositories.settings_repo import get_app_setting
@@ -406,7 +427,7 @@ def _send_telegram_notification(recipient, sender, subject, body, body_type, msg
 
         telegram_body = get_telegram_body_source(body, body_type, msg)
         telegram_text_body = _normalize_telegram_text_body(telegram_body["body"], telegram_body["body_type"])
-        tg_text = build_telegram_mail_text(recipient, display_sender, subject, telegram_text_body, email_id=email_id)
+        tg_text = build_telegram_mail_text(recipient, display_sender, subject, telegram_text_body, email_id=email_id, original_recipient=original_recipient)
         res = requests.post(
             f"https://api.telegram.org/bot{tg_bot_token}/sendMessage",
             json={"chat_id": tg_chat_id, "text": tg_text, "disable_web_page_preview": True},
@@ -418,11 +439,11 @@ def _send_telegram_notification(recipient, sender, subject, body, body_type, msg
         logging.getLogger(__name__).error(f"发送Telegram通知失败: {e}")
 
 
-def _notify_telegram_async(recipient, sender, subject, body, body_type, msg, email_id):
+def _notify_telegram_async(recipient, sender, subject, body, body_type, msg, email_id, original_recipient=""):
     """把 Telegram 通知丢进后台线程，让 250 OK 尽快返回，减少发件方因超时而重发。"""
     t = threading.Thread(
         target=_send_telegram_notification,
-        args=(recipient, sender, subject, body, body_type, msg, email_id),
+        args=(recipient, sender, subject, body, body_type, msg, email_id, original_recipient),
         daemon=True,
     )
     t.start()
@@ -449,6 +470,9 @@ def process_email_data(to_address, raw_email_data):
         return
 
     final_recipient = resolve_inbound_recipient(msg, to_address)
+    # 转发前的原始收件人：只存信头里有、信封里没有的那一个；
+    # 直投邮件这里为空，详情页仍只显示投递邮箱。
+    original_recipient = extract_original_recipient(msg, final_recipient, to_address)
 
     final_sender = None
     icloud_hme_header = msg.get("X-ICLOUD-HME")
@@ -538,13 +562,21 @@ def process_email_data(to_address, raw_email_data):
                 return
         try:
             cursor = conn.execute(
-                "INSERT INTO received_emails (recipient, sender, subject, body, body_type, message_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (final_recipient, final_sender, subject, body, body_type, message_id),
+                "INSERT INTO received_emails (recipient, original_recipient, sender, subject, body, body_type, message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (final_recipient, original_recipient or None, final_sender, subject, body, body_type, message_id),
             )
         except sqlite3.IntegrityError:
             # 并发重复投递命中唯一索引：视为重复，直接返回（发件方收到 250）
             logging.getLogger(__name__).info(f"跳过并发重复投递: Message-ID={message_id}")
             return
+        except sqlite3.OperationalError as exc:
+            # 旧库尚未跑 init_db 补列时不能丢信：降级按旧字段入库。
+            if "original_recipient" not in str(exc):
+                raise
+            cursor = conn.execute(
+                "INSERT INTO received_emails (recipient, sender, subject, body, body_type, message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (final_recipient, final_sender, subject, body, body_type, message_id),
+            )
         email_id = cursor.lastrowid
         for attachment in attachments:
             conn.execute(
@@ -561,7 +593,7 @@ def process_email_data(to_address, raw_email_data):
     finally:
         conn.close()
 
-    _notify_telegram_async(final_recipient, final_sender, subject, body, body_type, msg, email_id)
+    _notify_telegram_async(final_recipient, final_sender, subject, body, body_type, msg, email_id, original_recipient)
 
 
     run_cleanup_if_needed()

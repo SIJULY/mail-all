@@ -109,6 +109,11 @@ def init_db():
     if "message_id" not in columns:
         cursor.execute("ALTER TABLE received_emails ADD COLUMN message_id TEXT")
         conn.commit()
+    if "original_recipient" not in columns:
+        # 转发邮件的原始收件人（如 Gmail 转发前的 To），与投递邮箱分开存；
+        # 旧库启动时自动补列，新库 CREATE TABLE 时不含此列也由这里补齐。
+        cursor.execute("ALTER TABLE received_emails ADD COLUMN original_recipient TEXT")
+        conn.commit()
     cursor.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_received_emails_message_id ON received_emails (message_id) WHERE message_id IS NOT NULL"
     )
