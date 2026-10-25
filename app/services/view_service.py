@@ -199,15 +199,20 @@ def build_mail_query_context(is_admin_view, recipient_override=None, nav_mode="i
         enriched_emails_data.append(row_data)
 
     current_user = (session.get("user_email") or "").strip()
+    # 侧栏收件箱数字是 Gmail 式的未读数，不是全部邮件数：
+    # 已读、已删除的都不计；搜索/过滤也不影响它。
     if recipient_override:
-        inbox_count = total_emails
+        inbox_count = conn.execute(
+            "SELECT COUNT(*) FROM received_emails WHERE recipient = ? AND ifnull(is_deleted, 0) = 0 AND ifnull(is_read, 0) = 0",
+            (recipient_override,),
+        ).fetchone()[0]
         trash_count = 0
     elif is_admin_view:
-        inbox_count = conn.execute("SELECT COUNT(*) FROM received_emails WHERE ifnull(is_deleted, 0) = 0").fetchone()[0]
+        inbox_count = conn.execute("SELECT COUNT(*) FROM received_emails WHERE ifnull(is_deleted, 0) = 0 AND ifnull(is_read, 0) = 0").fetchone()[0]
         trash_count = conn.execute("SELECT COUNT(*) FROM received_emails WHERE ifnull(is_deleted, 0) = 1").fetchone()[0]
     else:
         inbox_count = conn.execute(
-            "SELECT COUNT(*) FROM received_emails WHERE recipient = ? AND ifnull(is_deleted, 0) = 0",
+            "SELECT COUNT(*) FROM received_emails WHERE recipient = ? AND ifnull(is_deleted, 0) = 0 AND ifnull(is_read, 0) = 0",
             (current_user,),
         ).fetchone()[0]
         trash_count = conn.execute(
