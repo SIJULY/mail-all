@@ -520,8 +520,18 @@ def sanitize_quoted_html(html_content: str) -> str:
     使用 bleach 白名单保留基础排版标签，剥离 script/style、事件属性、
     style 属性及非 http(s)/mailto 链接；未安装 bleach 时降级为全文转义
     （排版丢失但保证安全）。
+
+    注意：bleach 的 strip=True 只剥标签、不删内容——<style> 标签被剥掉后，
+    里面的整段 CSS 会变成正文文本节点，转发后正文开头就是一堆 @font-face，
+    连带发件时由它派生的纯文本版、Telegram 通知也全是 CSS。所以 bleach
+    之前先把 <head>、<style>、<script> 整块连内容一起删掉。
     """
     content = html_content or ""
+    # 整块删除：head（含标题/meta/样式）、body 里的 style、script。
+    # 顺序先 head 后 style/script，避免 head 里的 style 被单独处理后残留。
+    content = re.sub(r"<head\b[^>]*>.*?</head\s*>", "", content, flags=re.I | re.S)
+    content = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", content, flags=re.I | re.S)
+    content = re.sub(r"<script\b[^>]*>.*?</script\s*>", "", content, flags=re.I | re.S)
     try:
         import bleach
     except ImportError:
