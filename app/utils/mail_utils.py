@@ -514,40 +514,346 @@ def generate_subdomain_label(min_length: int = 3, max_length: int = 5) -> str:
 
 
 
+# 转发/回复引用里允许保留的内联 CSS 属性。故意不含 position/z-index/
+# top/left 等定位属性：引用内容嵌在写信编辑器里，定位样式可能盖住编辑器
+# 本身；也不含 opacity/content 等可用来藏字或注入的属性。
+_QUOTED_STYLE_PROPS = {
+    "background", "background-color", "background-image", "background-repeat",
+    "background-position", "background-size", "border", "border-top",
+    "border-bottom", "border-left", "border-right", "border-color",
+    "border-width", "border-style", "border-radius", "border-collapse",
+    "border-spacing", "box-sizing", "color", "padding", "padding-top",
+    "padding-bottom", "padding-left", "padding-right", "margin", "margin-top",
+    "margin-bottom", "margin-left", "margin-right", "font", "font-family",
+    "font-size", "font-weight", "font-style", "text-align", "text-decoration",
+    "text-transform", "text-indent", "line-height", "letter-spacing",
+    "word-spacing", "white-space", "word-break", "word-wrap", "overflow-wrap",
+    "display", "width", "height", "max-width", "max-height", "min-width",
+    "min-height", "vertical-align", "list-style", "list-style-type", "float",
+    "clear", "outline", "outline-color", "outline-width", "outline-style",
+}
+
+
+def _parse_style_declarations(style_text: str):
+    """把 style 属性 / CSS 规则体解析成 [(属性, 值)]，保序、去重后者为准。"""
+    out = []
+    seen = {}
+    for chunk in (style_text or "").split(";"):
+        if ":" not in chunk:
+            continue
+        prop, _, value = chunk.partition(":")
+        prop = prop.strip().lower()
+        value = value.strip()
+        if not prop or not value:
+            continue
+        value = re.sub(r"\s*!important\s*$", "", value, flags=re.I).strip()
+        if prop in seen:
+            out[seen[prop]] = (prop, value)
+        else:
+            seen[prop] = len(out)
+            out.append((prop, value))
+    return out
+
+
+def _filter_style_declarations(style_text: str) -> str:
+    """只留白名单属性，并去掉危险的 url()/expression 之类声明。"""
+    kept = []
+    for prop, value in _parse_style_declarations(style_text):
+        if prop not in _QUOTED_STYLE_PROPS:
+            continue
+        low = value.lower()
+        if "expression(" in low or "javascript:" in low or "vbscript:" in low or "behavior" in low or "-moz-binding" in low:
+            continue
+        if "url(" in low:
+            # 只放行 http(s) 图片/背景，data:/javascript: 等一律不要。
+            if not re.search(r"url\(\s*['\"]?https?://", low):
+                continue
+        kept.append(f"{prop}: {value}")
+    return "; ".join(kept)
+
+
+def _protect_style_attributes(content: str) -> str:
+    """bleach 未配 css_sanitizer 时会把 style 值清空（且服务器未必装
+    tinycss2），所以进 bleach 前先把 style 暂存为 data-qstyle，出 bleach
+    后再过滤还原。只改标签内的 style 属性，不动正文文本。"""
+
+    def _repl(match):
+        tag_head = match.group(1)
+        value = match.group(3) if match.group(3) is not None else match.group(4)
+        quote = '"' if match.group(3) is not None else "'"
+        return f"{tag_head} data-qstyle={quote}{value or ''}{quote}"
+
+    return re.sub(
+        r"(<[^>]*?)\sstyle\s*=\s*(\"([^\"]*)\"|'([^']*)')",
+        _repl,
+        content,
+    )
+
+
+def _restore_style_attributes(content: str) -> str:
+    def _repl(match):
+        # 分组：1=整个带引号的值，2=双引号内，3=单引号内。
+        raw = match.group(2) if match.group(2) is not None else match.group(3)
+        filtered = _filter_style_declarations(html.unescape(raw or ""))
+        if not filtered:
+            return ""
+        return f' style="{html.escape(filtered, quote=True)}"'
+
+    return re.sub(
+        r"\sdata-qstyle\s*=\s*(\"([^\"]*)\"|'([^']*)')",
+        _repl,
+        content,
+    )
+
+
+class _QuoteNode:
+    __slots__ = ("tag", "attrs", "children", "parent", "text")
+
+    def __init__(self, tag=None, attrs=None, parent=None, text=None):
+        self.tag = tag
+        self.attrs = dict(attrs or [])
+        self.children = []
+        self.parent = parent
+        self.text = text
+
+
+class _QuoteTreeParser(HTMLParser):
+    _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+             "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _QuoteNode(tag="root")
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = _QuoteNode(tag=tag, attrs=attrs, parent=self.stack[-1])
+        self.stack[-1].children.append(node)
+        if tag not in self._VOID:
+            self.stack.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        node = _QuoteNode(tag=tag, attrs=attrs, parent=self.stack[-1])
+        self.stack[-1].children.append(node)
+
+    def handle_endtag(self, tag):
+        for idx in range(len(self.stack) - 1, 0, -1):
+            if self.stack[idx].tag == tag:
+                del self.stack[idx:]
+                break
+
+    def handle_data(self, data):
+        if data:
+            self.stack[-1].children.append(_QuoteNode(parent=self.stack[-1], text=data))
+
+
+def _iter_quote_elements(node):
+    for child in node.children:
+        if child.tag:
+            yield child
+            yield from _iter_quote_elements(child)
+
+
+def _parse_simple_selector(part: str):
+    """只支持 tag / .class / #id 及其组合，含 : [ * + ~ ( 等一律不支持。"""
+    if not part or any(c in part for c in ":[]*+~()"):
+        return None
+    m = re.match(r"^([A-Za-z][\w-]*|\*)?", part)
+    tag = m.group(1) or None
+    rest = part[m.end():]
+    classes, elem_id = set(), None
+    for token in re.findall(r"[.#][A-Za-z_-][\w-]*", rest):
+        if token.startswith("."):
+            classes.add(token[1:])
+        else:
+            elem_id = token[1:]
+    if rest and re.sub(r"[.#][A-Za-z_-][\w-]*", "", rest):
+        return None
+    return (tag, classes, elem_id)
+
+
+def _simple_matches(node, simple):
+    tag, classes, elem_id = simple
+    if tag and tag != "*" and node.tag != tag:
+        return False
+    if elem_id and node.attrs.get("id") != elem_id:
+        return False
+    if classes:
+        node_classes = set((node.attrs.get("class") or "").split())
+        if not classes.issubset(node_classes):
+            return False
+    return True
+
+
+def _selector_matches(node, selector: str) -> bool:
+    """支持后代（空格）和子代（>），跳过伪类/属性选择器等复杂写法。"""
+    tokens = re.findall(r">|[^>\s]+", selector)
+    if not tokens:
+        return False
+    parts = []
+    combinator = " "
+    for token in tokens:
+        if token == ">":
+            combinator = ">"
+            continue
+        simple = _parse_simple_selector(token)
+        if simple is None:
+            return False
+        parts.append((combinator, simple))
+        combinator = " "
+    current, idx = node, len(parts) - 1
+    if not _simple_matches(current, parts[idx][1]):
+        return False
+    idx -= 1
+    while idx >= 0:
+        combinator, simple = parts[idx]
+        if combinator == ">":
+            current = current.parent
+            if current is None or not current.tag or current.tag == "root":
+                return False
+            if not _simple_matches(current, simple):
+                return False
+        else:
+            ancestor = current.parent
+            while ancestor is not None and ancestor.tag not in (None, "root") and not _simple_matches(ancestor, simple):
+                ancestor = ancestor.parent
+            if ancestor is None or ancestor.tag in (None, "root"):
+                return False
+            current = ancestor
+        idx -= 1
+    return True
+
+
+def _parse_css_rules(css_text: str):
+    """解析样式块：跳过 @media/@font-face 等 @ 规则（含其嵌套块），
+    只取普通规则。@media 里的移动端规则不内联——引用按桌面版排版走。"""
+    text = re.sub(r"/\*.*?\*/", "", css_text or "", flags=re.S)
+    rules, i, n = [], 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n;":
+            i += 1
+        if i >= n:
+            break
+        if text[i] == "@":
+            brace = text.find("{", i)
+            semi = text.find(";", i)
+            if brace == -1 or (semi != -1 and semi < brace):
+                i = semi + 1 if semi != -1 else n
+                continue
+            depth, j = 1, brace + 1
+            while j < n and depth:
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                j += 1
+            i = j
+            continue
+        brace = text.find("{", i)
+        if brace == -1:
+            break
+        selectors = text[i:brace].strip()
+        depth, j = 1, brace + 1
+        while j < n and depth:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+            j += 1
+        declarations = text[brace + 1:j - 1] if j > brace + 1 else ""
+        if selectors and declarations.strip():
+            rules.append((selectors, declarations))
+        i = j
+    return rules
+
+
+def _serialize_quote_node(node) -> str:
+    if node.tag is None:
+        return html.escape(node.text or "", quote=False)
+    attrs = "".join(f' {name}="{html.escape(value, quote=True)}"' for name, value in node.attrs.items())
+    if node.tag in _QuoteTreeParser._VOID:
+        return f"<{node.tag}{attrs}>"
+    inner = "".join(_serialize_quote_node(child) for child in node.children)
+    return f"<{node.tag}{attrs}>{inner}</{node.tag}>"
+
+
+def _inline_quoted_styles(content: str, css_blocks) -> str:
+    """把样式块规则转成内联 style：失败时原样返回，绝不阻塞转发。"""
+    try:
+        rules = []
+        for block in css_blocks:
+            rules.extend(_parse_css_rules(block))
+        if not rules:
+            return content
+        parser = _QuoteTreeParser()
+        parser.feed(content)
+        elements = list(_iter_quote_elements(parser.root))
+        rule_styles = {}
+        for selectors, declarations in rules:
+            parsed = _parse_style_declarations(declarations)
+            if not parsed:
+                continue
+            for selector in selectors.split(","):
+                selector = selector.strip()
+                if not selector:
+                    continue
+                for element in elements:
+                    if _selector_matches(element, selector):
+                        merged = dict(rule_styles.get(id(element), []))
+                        merged.update(dict(parsed))
+                        rule_styles[id(element)] = list(merged.items())
+        for element in elements:
+            if id(element) not in rule_styles:
+                continue
+            final = dict(rule_styles[id(element)])
+            final.update(dict(_parse_style_declarations(element.attrs.get("style", ""))))
+            element.attrs["style"] = "; ".join(f"{k}: {v}" for k, v in final.items())
+        return "".join(_serialize_quote_node(child) for child in parser.root.children)
+    except Exception:
+        return content
+
+
 def sanitize_quoted_html(html_content: str) -> str:
     """清洗回复/转发时引用的原邮件 HTML，使其可安全嵌入写信编辑器。
 
-    使用 bleach 白名单保留基础排版标签，剥离 script/style、事件属性、
-    style 属性及非 http(s)/mailto 链接；未安装 bleach 时降级为全文转义
-    （排版丢失但保证安全）。
-
-    注意：bleach 的 strip=True 只剥标签、不删内容——<style> 标签被剥掉后，
-    里面的整段 CSS 会变成正文文本节点，转发后正文开头就是一堆 @font-face，
-    连带发件时由它派生的纯文本版、Telegram 通知也全是 CSS。所以 bleach
-    之前先把 <head>、<style>、<script> 整块连内容一起删掉。
+    目标是“引用后排版尽量不变”：表格、图片、内联样式都保留；样式块
+    里的规则先转成内联样式再删块（直接留 <style> 会污染写信页本身的
+    样式，上一轮修 CSS 外泄时已证实 bleach 只剥标签不删内容）。最后仍
+    由 bleach 白名单把关：script/style/事件属性/class/id/定位样式一律
+    不进结果，未安装 bleach 时降级为全文转义。
     """
     content = html_content or ""
+    css_blocks = re.findall(r"<style\b[^>]*>(.*?)</style\s*>", content, flags=re.I | re.S)
     # 整块删除：head（含标题/meta/样式）、body 里的 style、script。
-    # 顺序先 head 后 style/script，避免 head 里的 style 被单独处理后残留。
     content = re.sub(r"<head\b[^>]*>.*?</head\s*>", "", content, flags=re.I | re.S)
     content = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", content, flags=re.I | re.S)
     content = re.sub(r"<script\b[^>]*>.*?</script\s*>", "", content, flags=re.I | re.S)
+    content = _inline_quoted_styles(content, css_blocks)
+    content = _protect_style_attributes(content)
     try:
         import bleach
     except ImportError:
         return html.escape(content)
-    return bleach.clean(
+    cleaned = bleach.clean(
         content,
         tags=[
-            "a", "b", "blockquote", "br", "code", "div", "em",
-            "h1", "h2", "h3", "h4", "hr", "i", "li", "ol",
-            "p", "pre", "span", "strong", "u", "ul",
+            "a", "b", "blockquote", "br", "caption", "center", "code",
+            "col", "colgroup", "div", "em", "font", "h1", "h2", "h3", "h4",
+            "hr", "i", "img", "li", "ol", "p", "pre", "span", "strong",
+            "table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul",
         ],
-        attributes={"a": ["href", "title"], "*": ["title"]},
+        attributes={
+            "a": ["href", "target"],
+            "img": ["src", "alt"],
+            "*": ["title", "data-qstyle", "align", "valign", "width",
+                  "height", "bgcolor", "border", "cellpadding", "cellspacing",
+                  "colspan", "rowspan", "color", "face", "size"],
+        },
         protocols=["http", "https", "mailto"],
         strip=True,
         strip_comments=True,
     )
+    return _restore_style_attributes(cleaned)
 
 
 
