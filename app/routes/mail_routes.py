@@ -160,6 +160,17 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
             "mail_template": f"/Mail?token={SPECIAL_VIEW_TOKEN}&mail={{mail}}",
         }
 
+    # IMAP 设置向导只在系统设置页需要：端口检测会连本机端口，
+    # 别让收件箱每次加载都多花这段时间；取数失败时向导直接不显示。
+    imap_wizard = None
+    if nav_mode == "system":
+        try:
+            from app.services.imap_wizard import get_imap_wizard_data
+
+            imap_wizard = get_imap_wizard_data(request.host if request else "")
+        except Exception:
+            imap_wizard = None
+
     return render_email_list_page(
         context["emails_data"],
         context["page"],
@@ -185,6 +196,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         system_modal_data=system_modal_data,
         mail_api_data=mail_api_data,
         ADMIN_USERNAME=ADMIN_USERNAME,
+        imap_wizard=imap_wizard,
     )
 
 
