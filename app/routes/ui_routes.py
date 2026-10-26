@@ -94,8 +94,8 @@ def register_ui_routes(app):
     @login_required
     def translate_email():
         """详情页手动翻译：只在用户点翻译按钮时调用，内容发给 Google
-        免费接口（无需 Key），不自动翻译、不存翻译结果。管理员可翻任意
-        邮件，普通用户只能翻投递给自己的邮件；已发送邮件同样可翻。"""
+        免费接口（无需 Key），不自动翻译、不存翻译结果。单管理员模式，
+        管理员可翻任意邮件；已发送邮件同样可翻。"""
         from app.repositories.db import get_db_conn
         from app.services.translation_service import (
             TranslationRateLimited,
@@ -162,9 +162,9 @@ def register_ui_routes(app):
     @app.route("/view")
     @login_required
     def view_emails():
-        from app.routes.mail_routes import base_view_logic
-
-        return base_view_logic(is_admin_view=False)
+        # 单管理员模式：/view 原是普通用户入口，现只有管理员能登录，
+        # 直接回到管理员收件箱，避免管理员误入按收件人过滤的半截视图。
+        return redirect(url_for("admin_view"))
 
     @app.route("/trash")
     @app.route("/trash/<int:email_id>")

@@ -6,7 +6,6 @@ from flask import flash, redirect, render_template_string, request, session, url
 from werkzeug.security import check_password_hash
 
 from app.config import ADMIN_PASSWORD_HASH, ADMIN_USERNAME, SYSTEM_TITLE
-from app.repositories.auth_repo import get_user_by_email
 from app.ui.html_pages import LOGIN_PAGE_TEMPLATE
 
 
@@ -26,17 +25,13 @@ def login_view():
     if request.method == "POST":
         email = request.form.get("email")
         password = request.form.get("password")
-        user = get_user_by_email(email)
 
         next_url = sanitize_next_url(request.args.get("next") or "")
 
+        # 单管理员模式：只认管理员账号，不再有普通用户登录。
         if email == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
             session["user_email"], session["is_admin"] = ADMIN_USERNAME, True
             return redirect(next_url or url_for("admin_view"))
-        elif user and check_password_hash(user["password_hash"], password):
-            session["user_email"] = user["email"]
-            session.pop("is_admin", None)
-            return redirect(next_url or url_for("view_emails"))
         else:
             flash("邮箱或密码错误", "error")
 

@@ -17,7 +17,7 @@ input[type="submit"]:hover {transform:translateY(-1px);}
 <h1 class="main-title">{{ SYSTEM_TITLE }}</h1>
 <div class="login-box"><h2>邮箱登录</h2>
 <form method="post">
-<label for="email">邮箱地址 (或管理员账户):</label><input type="text" name="email" required>
+<label for="email">管理员账户:</label><input type="text" name="email" required>
 <label for="password">密码:</label><input type="password" name="password" required>
 <input type="submit" value="登录"></form></div></body></html>
 '''

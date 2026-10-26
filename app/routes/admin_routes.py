@@ -5,9 +5,7 @@ import secrets
 import requests
 
 from flask import flash, jsonify, redirect, request, send_file, session, url_for
-from werkzeug.security import generate_password_hash
 
-from app.repositories.auth_repo import add_user, delete_user, get_user_by_email, sqlite3
 from app.repositories.settings_repo import set_app_setting
 from app.services.smtp_service import get_smtp_config, send_email_via_smtp_config
 from app.utils.decorators import admin_required, login_required
@@ -29,13 +27,6 @@ def register_admin_routes(app):
     def admin_domains():
         from app.routes.mail_routes import base_view_logic
         return base_view_logic(is_admin_view=True, nav_mode="domains")
-
-    @app.route("/admin/users")
-    @login_required
-    @admin_required
-    def admin_users():
-        from app.routes.mail_routes import base_view_logic
-        return base_view_logic(is_admin_view=True, nav_mode="users")
 
     @app.route("/admin/system")
     @login_required
@@ -124,35 +115,6 @@ def register_admin_routes(app):
         finally:
             conn.close()
         return redirect(url_for("admin_view"))
-
-    @app.route("/manage_users", methods=["GET", "POST"])
-    @login_required
-    @admin_required
-    def manage_users():
-        if request.method == "POST":
-            action = request.form.get("action")
-            if action == "add":
-                email = normalize_email_address(request.form.get("email", ""))
-                password = request.form.get("password") or ""
-                if not email or "@" not in email:
-                    flash("用户邮箱格式不正确", "error")
-                elif not password.strip():
-                    flash("用户密码不能为空", "error")
-                elif email == session.get("user_email"):
-                    flash("不能添加与当前管理员相同的邮箱", "error")
-                elif get_user_by_email(email):
-                    flash(f"用户 {email} 已存在", "error")
-                else:
-                    try:
-                        add_user(email, generate_password_hash(password))
-                        flash(f"用户 {email} 添加成功", "success")
-                    except sqlite3.IntegrityError:
-                        flash(f"用户 {email} 已存在", "error")
-            elif action == "delete":
-                deleted_count = delete_user(request.form.get("user_id"))
-                flash("用户已删除" if deleted_count else "用户不存在或不允许删除", "success" if deleted_count else "error")
-            return redirect(url_for("admin_users"))
-        return redirect(url_for("admin_users"))
 
     @app.route("/restore_email/<int:email_id>", methods=["POST"])
     @login_required

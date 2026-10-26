@@ -113,17 +113,14 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
 
 
     managed_domains = None
-    managed_users = None
     smtp_modal_data = None
     system_modal_data = None
     mail_api_data = None
 
     if is_admin_view:
         from app.repositories.mail_repo import get_managed_domains
-        from app.repositories.auth_repo import get_managed_users
 
         managed_domains = get_managed_domains(include_inactive=True)
-        managed_users = get_managed_users()
 
         cfg = get_smtp_config()
         smtp_modal_data = {
@@ -191,7 +188,6 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         inbox_count=context["inbox_count"],
         trash_count=context["trash_count"],
         managed_domains=managed_domains,
-        managed_users=managed_users,
         smtp_modal_data=smtp_modal_data,
         system_modal_data=system_modal_data,
         mail_api_data=mail_api_data,

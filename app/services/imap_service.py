@@ -4,9 +4,9 @@
 - 文件夹固定四个：INBOX（未删除的收信）、Trash（已删除的收信）、
   Sent（已发送）、Drafts（草稿）。UID 就是各表的 id，稳定递增；
   UIDVALIDITY 按文件夹固定（INBOX 1、Sent 2、Drafts 3、Trash 4）。
-- 登录账号就是网页登录账号：管理员 + 管理用户表里的邮箱密码，
-  随机生成的 MoeMail 地址没有密码，登不上 IMAP，要先在网页管理用户
-  里给那个邮箱设密码。普通用户只能看到自己收件人的信，管理员看全部。
+- 登录账号就是管理员账号（ADMIN_USERNAME + 管理员密码），单管理员
+  模式，不再有普通用户；随机生成的 MoeMail 地址没有密码，登不上
+  IMAP（它只是收信地址）。管理员登录后看全部信。
 - 标记与网页互通：\\Seen 对应 is_read，\\Flagged 对应 is_starred；
   \\Deleted 只存在本连接里，EXPUNGE 时才真正落库（INBOX 里是移到
   回收站，Trash/Sent/Drafts 里是彻底删除），连接断了没 EXPUNGE 的
@@ -28,7 +28,6 @@ from email.header import decode_header, make_header
 from email.utils import format_datetime, getaddresses, parseaddr
 
 from app.config import ADMIN_PASSWORD_HASH, ADMIN_USERNAME
-from app.repositories.auth_repo import get_user_by_email
 from app.repositories.db import get_db_conn
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -292,7 +291,11 @@ def flags_for(msg: dict, deleted_uids: set) -> list:
 
 
 def check_login(username: str, password: str):
-    """返回 (user_email, is_admin) 或 (None, False)。密码用 werkzeug 哈希比对。"""
+    """返回 (user_email, is_admin) 或 (None, False)。密码用 werkzeug 哈希比对。
+
+    单管理员模式：只认管理员账号，IMAP 与 SMTP 提交口共用此函数，
+    所以两处同时只剩管理员能登录。
+    """
     if not username or password is None:
         return None, False
     try:
@@ -301,9 +304,6 @@ def check_login(username: str, password: str):
         return None, False
     if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
         return ADMIN_USERNAME, True
-    user = get_user_by_email(username)
-    if user and check_password_hash(user["password_hash"], password):
-        return user["email"], False
     return None, False
 
 
