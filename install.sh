@@ -16,6 +16,8 @@ REPO_TARBALL_URL="https://codeload.github.com/SIJULY/mail-all/tar.gz/refs/heads/
 STAGED_SOURCE_DIR=""
 SERVICE_WEB="mail-api-web.service"
 SERVICE_SMTP="mail-api-smtp.service"
+SERVICE_IMAP="mail-api-imap.service"
+SERVICE_SUBMISSION="mail-api-submission.service"
 ENV_FILE="${PROJECT_DIR}/mail_api.env"
 EXISTING_DB_FILE_BASENAME="emails.db"
 EXISTING_LAST_CLEANUP_BASENAME="last_cleanup.txt"
@@ -194,19 +196,29 @@ cleanup_legacy_mail_services() {
   systemctl disable mail-web.service 2>/dev/null || true
   systemctl stop "${SERVICE_WEB}" 2>/dev/null || true
   systemctl stop "${SERVICE_SMTP}" 2>/dev/null || true
+  systemctl stop "${SERVICE_IMAP}" 2>/dev/null || true
+  systemctl stop "${SERVICE_SUBMISSION}" 2>/dev/null || true
   systemctl disable "${SERVICE_WEB}" 2>/dev/null || true
   systemctl disable "${SERVICE_SMTP}" 2>/dev/null || true
+  systemctl disable "${SERVICE_IMAP}" 2>/dev/null || true
+  systemctl disable "${SERVICE_SUBMISSION}" 2>/dev/null || true
   rm -f /etc/systemd/system/mail-smtp.service
   rm -f /etc/systemd/system/mail-web.service
   rm -f /etc/systemd/system/${SERVICE_WEB}
   rm -f /etc/systemd/system/${SERVICE_SMTP}
+  rm -f /etc/systemd/system/${SERVICE_IMAP}
+  rm -f /etc/systemd/system/${SERVICE_SUBMISSION}
   rm -f /etc/systemd/system/multi-user.target.wants/mail-smtp.service
   rm -f /etc/systemd/system/multi-user.target.wants/mail-web.service
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_WEB}
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_SMTP}
+  rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_IMAP}
+  rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_SUBMISSION}
   systemctl daemon-reload
   pkill -f "/opt/mail_api/app.py" 2>/dev/null || true
   pkill -f "/opt/mail_api/smtp_runner.py" 2>/dev/null || true
+  pkill -f "/opt/mail_api/imap_runner.py" 2>/dev/null || true
+  pkill -f "/opt/mail_api/submission_runner.py" 2>/dev/null || true
   pkill -f "gunicorn.*app:app" 2>/dev/null || true
   sleep 2
 
@@ -397,6 +409,10 @@ MAIL_SMTP_USERNAME=${esc_smtp_username}
 MAIL_SMTP_PASSWORD=${esc_smtp_password}
 MAIL_DEFAULT_SENDER=${esc_default_sender}
 MAIL_SMTP_LISTEN_PORT="${SMTP_LISTEN_PORT_VALUE}"
+MAIL_IMAP_PORT="143"
+MAIL_IMAPS_PORT="993"
+MAIL_SUBMISSION_PORT="587"
+MAIL_SUBMISSION_TLS_PORT="465"
 MAIL_SPECIAL_VIEW_TOKEN=${esc_special_view_token}
 MAIL_MOEMAIL_API_KEY=${esc_moemail_api_key}
 MAIL_MOEMAIL_DEFAULT_EXPIRY=${esc_moemail_default_expiry}
@@ -417,6 +433,24 @@ from app.services.inbound_service import run_smtp_server
 
 if __name__ == "__main__":
     run_smtp_server(app.logger)
+EOF
+}
+
+write_imap_runner() {
+  cat > "${PROJECT_DIR}/imap_runner.py" <<'EOF'
+from app.services.imap_service import main
+
+if __name__ == "__main__":
+    main()
+EOF
+}
+
+write_submission_runner() {
+  cat > "${PROJECT_DIR}/submission_runner.py" <<'EOF'
+from app.services.submission_service import main
+
+if __name__ == "__main__":
+    main()
 EOF
 }
 
@@ -457,6 +491,40 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+  cat > "/etc/systemd/system/${SERVICE_IMAP}" <<EOF
+[Unit]
+Description=Mail API IMAP Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${VENV_DIR}/bin/python ${PROJECT_DIR}/imap_runner.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "/etc/systemd/system/${SERVICE_SUBMISSION}" <<EOF
+[Unit]
+Description=Mail API SMTP Submission Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${VENV_DIR}/bin/python ${PROJECT_DIR}/submission_runner.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   ok "systemd 服务文件已创建。"
 }
 
@@ -465,8 +533,12 @@ reload_and_start_services() {
   systemctl daemon-reload
   systemctl enable "${SERVICE_WEB}"
   systemctl enable "${SERVICE_SMTP}"
+  systemctl enable "${SERVICE_IMAP}"
+  systemctl enable "${SERVICE_SUBMISSION}"
   systemctl restart "${SERVICE_WEB}"
   systemctl restart "${SERVICE_SMTP}"
+  systemctl restart "${SERVICE_IMAP}"
+  systemctl restart "${SERVICE_SUBMISSION}"
   ok "服务已启动并设置开机自启。"
 }
 
@@ -474,11 +546,17 @@ configure_firewall() {
   log "配置防火墙..."
   ufw allow "${WEB_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${SMTP_LISTEN_PORT_VALUE}/tcp" >/dev/null 2>&1 || true
+  for mail_port in 143 993 587 465; do
+    ufw allow "${mail_port}/tcp" >/dev/null 2>&1 || true
+  done
   if command -v iptables >/dev/null 2>&1; then
     iptables -C INPUT -p tcp --dport "${WEB_PORT}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${WEB_PORT}" -j ACCEPT 2>/dev/null || true
     iptables -C INPUT -p tcp --dport "${SMTP_LISTEN_PORT_VALUE}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${SMTP_LISTEN_PORT_VALUE}" -j ACCEPT 2>/dev/null || true
+    for mail_port in 143 993 587 465; do
+      iptables -C INPUT -p tcp --dport "${mail_port}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${mail_port}" -j ACCEPT 2>/dev/null || true
+    done
   fi
-  ok "防火墙规则已放行端口 ${WEB_PORT} 和 ${SMTP_LISTEN_PORT_VALUE}。"
+  ok "防火墙规则已放行端口 ${WEB_PORT}、${SMTP_LISTEN_PORT_VALUE}、143、993、587、465。"
 }
 
 show_summary() {
@@ -543,10 +621,16 @@ uninstall_server() {
 
   systemctl stop "${SERVICE_WEB}" 2>/dev/null || true
   systemctl stop "${SERVICE_SMTP}" 2>/dev/null || true
+  systemctl stop "${SERVICE_IMAP}" 2>/dev/null || true
+  systemctl stop "${SERVICE_SUBMISSION}" 2>/dev/null || true
   systemctl disable "${SERVICE_WEB}" 2>/dev/null || true
   systemctl disable "${SERVICE_SMTP}" 2>/dev/null || true
+  systemctl disable "${SERVICE_IMAP}" 2>/dev/null || true
+  systemctl disable "${SERVICE_SUBMISSION}" 2>/dev/null || true
   rm -f "/etc/systemd/system/${SERVICE_WEB}"
   rm -f "/etc/systemd/system/${SERVICE_SMTP}"
+  rm -f "/etc/systemd/system/${SERVICE_IMAP}"
+  rm -f "/etc/systemd/system/${SERVICE_SUBMISSION}"
   systemctl daemon-reload
   rm -rf "${PROJECT_DIR}"
   ok "卸载完成。"
@@ -663,6 +747,8 @@ collect_inputs() {
 install_flow() {
   write_env_file
   write_smtp_runner
+  write_imap_runner
+  write_submission_runner
   write_systemd_services
   reload_and_start_services
   configure_firewall
@@ -697,6 +783,8 @@ update_flow() {
   ensure_venv
   install_python_packages
   write_smtp_runner
+  write_imap_runner
+  write_submission_runner
   write_systemd_services
   reload_and_start_services
   configure_firewall

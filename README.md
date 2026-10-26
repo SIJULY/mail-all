@@ -49,11 +49,16 @@ python3 -c "from app import app; print(app)"
 - `MAIL_SMTP_USERNAME`
 - `MAIL_SMTP_PASSWORD`
 - `MAIL_DEFAULT_SENDER`
+- `MAIL_IMAP_PORT`（默认 143，IMAP 明文 + STARTTLS）
+- `MAIL_IMAPS_PORT`（默认 993，IMAP 隐式 TLS，需证书）
+- `MAIL_SUBMISSION_PORT`（默认 587，SMTP 提交口 + STARTTLS）
+- `MAIL_SUBMISSION_TLS_PORT`（默认 465，SMTP 提交隐式 TLS，需证书）
+- `MAIL_IMAP_CERT` / `MAIL_IMAP_KEY`（未设置时沿用 `MAIL_SMTP_CERT` / `MAIL_SMTP_KEY`）
 
 ## 重构后项目结构
 
 说明：
-- `app.py` 仍是主入口，直接运行时会启动 Web 与 SMTP
+- `app.py` 仍是主入口，直接运行时会启动 Web、SMTP 收信、IMAP 与 SMTP 提交口
 - `app/` 是拆分后的主应用目录，负责 Flask 应用组装、路由、服务、仓储与 UI
 - 本次重构以“功能不变、UI 不变、路由不变、SMTP 外部行为不变”为原则
 
@@ -85,6 +90,8 @@ mail/
     │   ├── auth_service.py   # 登录、退出、鉴权视图逻辑
     │   ├── cleanup_service.py# 邮件清理相关服务
     │   ├── inbound_service.py# 入站 SMTP 处理服务
+    │   ├── imap_service.py   # IMAP 服务（143/993，供邮件客户端读信）
+    │   ├── submission_service.py # SMTP 提交服务（587/465，供邮件客户端发信）
     │   ├── message_service.py# 邮件解析、序列化、入库处理
     │   ├── settings_service.py # 设置与域名选择逻辑
     │   ├── smtp_service.py   # SMTP 配置读取与发信逻辑
@@ -102,10 +109,30 @@ mail/
         └── time_utils.py     # 时间解析与转换辅助函数
 ```
 
+## iPhone 邮件 App 接入（IMAP + SMTP 提交）
+
+服务器上跑四个服务：Web、25 端口收信、IMAP（143/993）、SMTP 提交（587/465）。
+iPhone 上“设置 → 邮件 → 账户 → 添加账户 → 其他 → 添加邮件账户”，按下面填：
+
+- 收件服务器：主机名填邮件服务器域名或 IP，用户名填邮局登录邮箱，
+  密码填该邮箱的登录密码，端口 **993**（SSL 打开）；没有有效证书时改用
+  端口 **143** 并把 SSL 关掉（明文，不推荐长期用）。
+- 发件服务器：主机名同上，用户名和密码同上，端口 **465**（SSL 打开）；
+  没有有效证书时改用端口 **587** 并把 SSL 关掉。
+- 文件夹对应：收件箱 = INBOX，已发送 = Sent，草稿 = Drafts，回收站 = Trash；
+  iPhone 上标已读/星标/删信会同步回网页版。
+- 注意三点：① 登录账号必须是网页版的登录账号（管理员或管理用户里的邮箱
+  密码），随机生成的 MoeMail 地址没有密码，登不上 IMAP，要先在网页管理用户
+  里给它设密码；② 发件的 MAIL FROM 必须等于登录邮箱，管理员只能用系统
+  设置里的默认发件人，否则提交口会拒收（防开放中继）；③ iPhone 对通用
+  IMAP 是定时拉取，不是 iCloud 那种即时推送，新邮件按你设的获取频率到达。
+
 ## 说明
 
 - Web 入口与路由组装位于 `app/`
 - SMTP 接收启动入口保留在 `app.py`
+- IMAP 与 SMTP 提交口的启动入口分别是 `app/services/imap_service.py`、
+  `app/services/submission_service.py`，`app.py` 直接运行时也会一并启动
 - 推荐使用上方一键安装脚本部署
 
 ## 轮询邮箱生成 API
