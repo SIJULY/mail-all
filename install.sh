@@ -18,6 +18,8 @@ SERVICE_WEB="mail-api-web.service"
 SERVICE_SMTP="mail-api-smtp.service"
 SERVICE_IMAP="mail-api-imap.service"
 SERVICE_SUBMISSION="mail-api-submission.service"
+SERVICE_TRANSLATE="mail-api-translate.service"
+LT_VENV_DIR="${PROJECT_DIR}/lt-venv"
 ENV_FILE="${PROJECT_DIR}/mail_api.env"
 EXISTING_DB_FILE_BASENAME="emails.db"
 EXISTING_LAST_CLEANUP_BASENAME="last_cleanup.txt"
@@ -198,22 +200,26 @@ cleanup_legacy_mail_services() {
   systemctl stop "${SERVICE_SMTP}" 2>/dev/null || true
   systemctl stop "${SERVICE_IMAP}" 2>/dev/null || true
   systemctl stop "${SERVICE_SUBMISSION}" 2>/dev/null || true
+  systemctl stop "${SERVICE_TRANSLATE}" 2>/dev/null || true
   systemctl disable "${SERVICE_WEB}" 2>/dev/null || true
   systemctl disable "${SERVICE_SMTP}" 2>/dev/null || true
   systemctl disable "${SERVICE_IMAP}" 2>/dev/null || true
   systemctl disable "${SERVICE_SUBMISSION}" 2>/dev/null || true
+  systemctl disable "${SERVICE_TRANSLATE}" 2>/dev/null || true
   rm -f /etc/systemd/system/mail-smtp.service
   rm -f /etc/systemd/system/mail-web.service
   rm -f /etc/systemd/system/${SERVICE_WEB}
   rm -f /etc/systemd/system/${SERVICE_SMTP}
   rm -f /etc/systemd/system/${SERVICE_IMAP}
   rm -f /etc/systemd/system/${SERVICE_SUBMISSION}
+  rm -f /etc/systemd/system/${SERVICE_TRANSLATE}
   rm -f /etc/systemd/system/multi-user.target.wants/mail-smtp.service
   rm -f /etc/systemd/system/multi-user.target.wants/mail-web.service
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_WEB}
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_SMTP}
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_IMAP}
   rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_SUBMISSION}
+  rm -f /etc/systemd/system/multi-user.target.wants/${SERVICE_TRANSLATE}
   systemctl daemon-reload
   pkill -f "/opt/mail_api/app.py" 2>/dev/null || true
   pkill -f "/opt/mail_api/smtp_runner.py" 2>/dev/null || true
@@ -413,6 +419,7 @@ MAIL_IMAP_PORT="143"
 MAIL_IMAPS_PORT="993"
 MAIL_SUBMISSION_PORT="587"
 MAIL_SUBMISSION_TLS_PORT="465"
+MAIL_TRANSLATE_URL="http://127.0.0.1:5000/translate"
 MAIL_SPECIAL_VIEW_TOKEN=${esc_special_view_token}
 MAIL_MOEMAIL_API_KEY=${esc_moemail_api_key}
 MAIL_MOEMAIL_DEFAULT_EXPIRY=${esc_moemail_default_expiry}
@@ -452,6 +459,44 @@ from app.services.submission_service import main
 if __name__ == "__main__":
     main()
 EOF
+}
+
+install_libretranslate() {
+  # 本地翻译服务：LibreTranslate 装进独立 venv，不跟邮局主 venv 抢依赖。
+  # 只绑 127.0.0.1:5000，不对外放行端口；翻译请求不出本机。
+  # 安装失败不中断主流程（邮件服务不受影响），翻译按钮会报服务未就绪。
+  log "安装本地翻译服务 LibreTranslate..."
+  if [ ! -x "${LT_VENV_DIR}/bin/libretranslate" ]; then
+    python3 -m venv "${LT_VENV_DIR}" || {
+      warn "创建翻译 venv 失败，跳过翻译服务安装。"
+      return 0
+    }
+    "${LT_VENV_DIR}/bin/pip" install -q --upgrade pip || true
+    if ! "${LT_VENV_DIR}/bin/pip" install -q libretranslate; then
+      warn "LibreTranslate 安装失败，跳过翻译服务安装（可稍后重跑安装脚本重试）。"
+      return 0
+    fi
+  fi
+  ok "LibreTranslate 已安装。"
+}
+
+wait_for_translate() {
+  # 首次启动需下载英中语言模型，可能需要几分钟；只等 300 秒，
+  # 超时也不报错，服务会在后台继续下载，模型就绪后翻译自动可用。
+  if [ ! -f "/etc/systemd/system/${SERVICE_TRANSLATE}" ]; then
+    return 0
+  fi
+  log "等待本地翻译服务就绪（首次启动需下载英中语言模型，可能需要几分钟）..."
+  local waited=0
+  while [ "${waited}" -lt 300 ]; do
+    if curl -s --max-time 5 "http://127.0.0.1:5000/languages" >/dev/null 2>&1; then
+      ok "本地翻译服务已就绪。"
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  warn "本地翻译服务仍在下载语言模型，稍后可用（此前翻译按钮报服务未就绪属正常）。"
 }
 
 write_systemd_services() {
@@ -525,6 +570,26 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+  # 翻译服务只在 LibreTranslate 装好时才建单元；没装好时不建，
+  # 避免 systemd 对着不存在的 binary 空转重启。
+  if [ -x "${LT_VENV_DIR}/bin/libretranslate" ]; then
+    cat > "/etc/systemd/system/${SERVICE_TRANSLATE}" <<EOF
+[Unit]
+Description=Mail API Local Translation Service (LibreTranslate)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${LT_VENV_DIR}/bin/libretranslate --host 127.0.0.1 --port 5000 --load-only en,zh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
+
   ok "systemd 服务文件已创建。"
 }
 
@@ -535,10 +600,16 @@ reload_and_start_services() {
   systemctl enable "${SERVICE_SMTP}"
   systemctl enable "${SERVICE_IMAP}"
   systemctl enable "${SERVICE_SUBMISSION}"
+  if [ -f "/etc/systemd/system/${SERVICE_TRANSLATE}" ]; then
+    systemctl enable "${SERVICE_TRANSLATE}"
+  fi
   systemctl restart "${SERVICE_WEB}"
   systemctl restart "${SERVICE_SMTP}"
   systemctl restart "${SERVICE_IMAP}"
   systemctl restart "${SERVICE_SUBMISSION}"
+  if [ -f "/etc/systemd/system/${SERVICE_TRANSLATE}" ]; then
+    systemctl restart "${SERVICE_TRANSLATE}"
+  fi
   ok "服务已启动并设置开机自启。"
 }
 
@@ -580,6 +651,7 @@ show_summary() {
   echo "常用命令:"
   echo "  systemctl status ${SERVICE_WEB}"
   echo "  systemctl status ${SERVICE_SMTP}"
+  echo "  systemctl status ${SERVICE_TRANSLATE}"
   echo "  journalctl -u ${SERVICE_WEB} -f"
   echo "  journalctl -u ${SERVICE_SMTP} -f"
   echo
@@ -623,14 +695,17 @@ uninstall_server() {
   systemctl stop "${SERVICE_SMTP}" 2>/dev/null || true
   systemctl stop "${SERVICE_IMAP}" 2>/dev/null || true
   systemctl stop "${SERVICE_SUBMISSION}" 2>/dev/null || true
+  systemctl stop "${SERVICE_TRANSLATE}" 2>/dev/null || true
   systemctl disable "${SERVICE_WEB}" 2>/dev/null || true
   systemctl disable "${SERVICE_SMTP}" 2>/dev/null || true
   systemctl disable "${SERVICE_IMAP}" 2>/dev/null || true
   systemctl disable "${SERVICE_SUBMISSION}" 2>/dev/null || true
+  systemctl disable "${SERVICE_TRANSLATE}" 2>/dev/null || true
   rm -f "/etc/systemd/system/${SERVICE_WEB}"
   rm -f "/etc/systemd/system/${SERVICE_SMTP}"
   rm -f "/etc/systemd/system/${SERVICE_IMAP}"
   rm -f "/etc/systemd/system/${SERVICE_SUBMISSION}"
+  rm -f "/etc/systemd/system/${SERVICE_TRANSLATE}"
   systemctl daemon-reload
   rm -rf "${PROJECT_DIR}"
   ok "卸载完成。"
@@ -749,9 +824,11 @@ install_flow() {
   write_smtp_runner
   write_imap_runner
   write_submission_runner
+  install_libretranslate
   write_systemd_services
   reload_and_start_services
   configure_firewall
+  wait_for_translate
   show_summary
 }
 
@@ -785,9 +862,11 @@ update_flow() {
   write_smtp_runner
   write_imap_runner
   write_submission_runner
+  install_libretranslate
   write_systemd_services
   reload_and_start_services
   configure_firewall
+  wait_for_translate
   echo
   ok "代码更新完成（已保留原有配置和数据库）"
   echo "环境配置文件: ${ENV_FILE}"

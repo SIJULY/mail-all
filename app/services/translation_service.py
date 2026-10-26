@@ -1,17 +1,22 @@
-"""邮件翻译服务：Google 免费接口（translate.googleapis.com，client=gtx，无需 Key）。
+"""邮件翻译服务：本地 LibreTranslate（默认 http://127.0.0.1:5000/translate）。
 
-手动点翻译时才调用，邮件内容只在那一刻发给 Google；不自动翻译、不存
-翻译结果，页面刷新后再次点翻译会重新请求。Google 免费接口按 IP 限流，
-遇到 429 会重试 3 次，仍失败则返回限流错误，前端提示稍后再试，不静默
-换别的翻译方（用户选的就是 Google）。
+手动点翻译时才调用，邮件内容只在那一刻发给本机翻译服务；不自动
+翻译、不存翻译结果，页面刷新后再次点翻译会重新请求。模型跑在本
+机，不经过任何第三方翻译商，也就没有 Google 免费接口那种按 IP 的
+429 限流；代价是翻译质量比 Google 略差，且首次启动要下载语言模型，
+模型没下完之前翻译会报服务未就绪，等一会儿再试即可。
+
+翻译服务地址可用环境变量 MAIL_TRANSLATE_URL 覆盖（默认指向本机
+LibreTranslate 的 /translate 端口，install.sh 会一并装好该服务）。
 """
 
 import html
+import os
 import re
 import time
 from html.parser import HTMLParser
 
-GT_URL = "https://translate.googleapis.com/translate_a/single"
+LT_URL = os.environ.get("MAIL_TRANSLATE_URL", "http://127.0.0.1:5000/translate").rstrip("/")
 MAX_CHUNK_CHARS = 3500
 # 批量翻译文本节点时的分隔标记：无意义的字母数字串，翻译方通常原样保留。
 # 万一分隔后数量对不上，自动退回逐节点翻译，绝不把错位的译文拼回去。
@@ -47,45 +52,66 @@ def _is_url_or_email(text: str) -> bool:
     return False
 
 
-def _parse_gtx_response(data):
-    """解析 gtx 返回：[[[译文, 原文, ...], ...], ..., 检测到的源语言]。"""
-    segments = data[0] if isinstance(data, list) and data else []
-    translated = "".join(seg[0] for seg in segments if seg and seg[0])
-    detected = data[2] if len(data) > 2 else None
+def _target_code(target: str) -> str:
+    """把调用方传的 zh-CN 这类目标码转成 LibreTranslate 的语言码（zh）。"""
+    code = (target or "zh").strip().lower().replace("_", "-").split("-")[0]
+    return code or "zh"
+
+
+def _parse_lt_response(data):
+    """解析 LibreTranslate 返回：{translatedText, detectedLanguage?}。"""
+    if not isinstance(data, dict):
+        raise TranslationError("翻译结果解析失败")
+    translated = data.get("translatedText")
+    if isinstance(translated, list):
+        translated = "".join(str(t) for t in translated)
+    if not isinstance(translated, str):
+        raise TranslationError("翻译结果解析失败")
+    detected = None
+    det = data.get("detectedLanguage")
+    if isinstance(det, dict):
+        detected = det.get("language")
+    elif isinstance(det, list) and det and isinstance(det[0], dict):
+        detected = det[0].get("language")
     return translated, detected
 
 
-def _gtx_translate(text: str, target: str = "zh-CN", http_get=None) -> tuple:
+def _lt_translate(text: str, target: str = "zh-CN", http_post=None) -> tuple:
     """翻译一段文本（调用方负责分段，单段不超过 MAX_CHUNK_CHARS）。"""
-    if http_get is None:
+    if http_post is None:
         import requests
 
-        http_get = requests.get
+        http_post = requests.post
+    payload = {"q": text, "source": "auto", "target": _target_code(target), "format": "text"}
     last_error = None
     for attempt in range(3):
         try:
-            resp = http_get(
-                GT_URL,
-                params={"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text},
-                timeout=20,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-        except Exception as exc:  # 网络异常也重试
-            last_error = TranslationError(f"翻译请求失败: {exc}")
+            resp = http_post(LT_URL, json=payload, timeout=50)
+        except Exception as exc:  # 本地服务没起来、模型没下完都会走到这里
+            last_error = TranslationError(f"本地翻译服务未就绪，请稍后再试: {exc}")
             if attempt < 2:
                 time.sleep(1 + attempt * 2)
                 continue
             raise last_error
         if resp.status_code == 429:
-            last_error = TranslationRateLimited("Google 翻译接口限流，请稍后再试")
+            last_error = TranslationRateLimited("本地翻译服务限流，请稍后再试")
             if attempt < 2:
                 time.sleep(1 + attempt * 2)
                 continue
             raise last_error
         if resp.status_code != 200:
-            raise TranslationError(f"翻译服务返回 {resp.status_code}")
+            err = ""
+            try:
+                err = (resp.json() or {}).get("error", "")
+            except Exception:
+                pass
+            raise TranslationError(
+                f"本地翻译服务返回 {resp.status_code}" + (f": {err}" if err else "")
+            )
         try:
-            return _parse_gtx_response(resp.json())
+            return _parse_lt_response(resp.json())
+        except TranslationError:
+            raise
         except Exception as exc:
             raise TranslationError(f"翻译结果解析失败: {exc}")
     raise last_error or TranslationError("翻译失败")
@@ -122,7 +148,7 @@ def _split_text(text: str, max_chars: int = MAX_CHUNK_CHARS):
     return chunks or [""]
 
 
-def translate_text(text: str, target: str = "zh-CN", http_get=None) -> tuple:
+def translate_text(text: str, target: str = "zh-CN", http_post=None) -> tuple:
     """翻译纯文本。返回 (译文, 检测到的源语言)。已是中文则原样返回。"""
     if not text or not text.strip():
         return text, None
@@ -130,7 +156,7 @@ def translate_text(text: str, target: str = "zh-CN", http_get=None) -> tuple:
         return text, "zh"
     translated_parts, detected = [], None
     for chunk in _split_text(text):
-        part, chunk_detected = _gtx_translate(chunk, target=target, http_get=http_get)
+        part, chunk_detected = _lt_translate(chunk, target=target, http_post=http_post)
         translated_parts.append(part)
         detected = detected or chunk_detected
     return "".join(translated_parts), detected
@@ -210,7 +236,7 @@ def _apply_leading_trailing(original: str, translated: str) -> str:
     return f"{leading}{translated.strip()}{trailing}"
 
 
-def translate_html(html_content: str, target: str = "zh-CN", http_get=None) -> tuple:
+def translate_html(html_content: str, target: str = "zh-CN", http_post=None) -> tuple:
     """翻译 HTML 邮件：只翻文本节点，标签、属性、链接、图片原样保留。
 
     文本节点先批量翻译（分隔标记拼接），分隔对不上时自动退回逐节点
@@ -237,15 +263,15 @@ def translate_html(html_content: str, target: str = "zh-CN", http_get=None) -> t
     for batch in batches:
         joined = f"\n{_BATCH_SEP}\n".join((n.text or "").strip() for n in batch)
         try:
-            translated_joined, batch_detected = _gtx_translate(joined, target=target, http_get=http_get)
+            translated_joined, batch_detected = _lt_translate(joined, target=target, http_post=http_post)
         except TranslationError:
             raise
         detected = detected or batch_detected
         parts = [p.strip() for p in translated_joined.split(_BATCH_SEP)]
         if len(parts) != len(batch):
-            # 分隔标记被翻译方改动：退回逐节点翻译，绝不錯位拼接。
+            # 分隔标记被翻译方改动：退回逐节点翻译，绝不错位拼接。
             for node in batch:
-                part, node_detected = translate_text(node.text or "", target=target, http_get=http_get)
+                part, node_detected = translate_text(node.text or "", target=target, http_post=http_post)
                 node.text = _apply_leading_trailing(node.text or "", part)
                 detected = detected or node_detected
             continue
@@ -254,12 +280,12 @@ def translate_html(html_content: str, target: str = "zh-CN", http_get=None) -> t
     return "".join(_serialize_translate_node(child) for child in parser.root.children), detected
 
 
-def translate_mail_body(body: str, body_type: str, target: str = "zh-CN", http_get=None) -> tuple:
+def translate_mail_body(body: str, body_type: str, target: str = "zh-CN", http_post=None) -> tuple:
     """按正文类型分发。返回 (译后正文, 是否已是中文, 检测到的源语言)。"""
     if "html" in (body_type or "").lower():
-        translated, detected = translate_html(body, target=target, http_get=http_get)
+        translated, detected = translate_html(body, target=target, http_post=http_post)
         return translated, False, detected
     if _is_mostly_chinese(body or ""):
         return body, True, "zh"
-    translated, detected = translate_text(body, target=target, http_get=http_get)
+    translated, detected = translate_text(body, target=target, http_post=http_post)
     return translated, False, detected
