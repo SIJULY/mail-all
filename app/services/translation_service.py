@@ -1,13 +1,17 @@
-"""邮件翻译服务：本地 LibreTranslate（默认 http://127.0.0.1:5000/translate）。
+"""邮件翻译服务：DeepL API。
 
-手动点翻译时才调用，邮件内容只在那一刻发给本机翻译服务；不自动
-翻译、不存翻译结果，页面刷新后再次点翻译会重新请求。模型跑在本
-机，不经过任何第三方翻译商，也就没有 Google 免费接口那种按 IP 的
-429 限流；代价是翻译质量比 Google 略差，且首次启动要下载语言模型，
-模型没下完之前翻译会报服务未就绪，等一会儿再试即可。
+手动点翻译时才调用，邮件内容只在那一刻发给 DeepL；不自动翻译、
+不存翻译结果，页面刷新后再次点翻译会重新请求。
 
-翻译服务地址可用环境变量 MAIL_TRANSLATE_URL 覆盖（默认指向本机
-LibreTranslate 的 /translate 端口，install.sh 会一并装好该服务）。
+API Key 存在服务器环境文件 mail_api.env 的 MAIL_DEEPL_API_KEY（不进
+仓库、不写代码里）；没配 Key 时点翻译会明确报错，不静默失败。
+Key 以 :fx 结尾走免费接口 api-free.deepl.com，否则走 api.deepl.com；
+也可用 MAIL_DEEPL_API_URL 直接指定接口地址。
+
+HTML 邮件：只收集文本节点（标签、属性、链接、图片原样保留），按
+DeepL 原生多文本接口一次发一组（每组最多 50 条），按顺序一一对应
+贴回——不用分隔标记拼接，根治此前分隔标记被模型翻译掉导致错位、
+被迫逐节点重翻的问题。
 """
 
 import html
@@ -16,11 +20,10 @@ import re
 import time
 from html.parser import HTMLParser
 
-LT_URL = os.environ.get("MAIL_TRANSLATE_URL", "http://127.0.0.1:5000/translate").rstrip("/")
+_DEEPL_FREE_URL = "https://api-free.deepl.com/v2/translate"
+_DEEPL_PRO_URL = "https://api.deepl.com/v2/translate"
 MAX_CHUNK_CHARS = 3500
-# 批量翻译文本节点时的分隔标记：无意义的字母数字串，翻译方通常原样保留。
-# 万一分隔后数量对不上，自动退回逐节点翻译，绝不把错位的译文拼回去。
-_BATCH_SEP = "TRANSLATESEP12345"
+MAX_TEXTS_PER_REQUEST = 50
 _SKIP_TAGS = {"script", "style", "head", "title", "noscript"}
 
 
@@ -47,73 +50,79 @@ def _is_url_or_email(text: str) -> bool:
     stripped = text.strip()
     if re.fullmatch(r"https?://\S+", stripped):
         return True
-    if re.fullmatch(r"[\w.+-]+@[\w-]+\.[\w.]+", stripped):
+    if re.fullmatch(r"[\w.+-]+@[\w-]+[\w.]+", stripped):
         return True
     return False
 
 
+def _api_key() -> str:
+    return os.environ.get("MAIL_DEEPL_API_KEY", "").strip()
+
+
+def _api_url() -> str:
+    override = os.environ.get("MAIL_DEEPL_API_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    return _DEEPL_FREE_URL if _api_key().endswith(":fx") else _DEEPL_PRO_URL
+
+
 def _target_code(target: str) -> str:
-    """把调用方传的 zh-CN 这类目标码转成 LibreTranslate 的语言码（zh）。"""
-    code = (target or "zh").strip().lower().replace("_", "-").split("-")[0]
-    return code or "zh"
+    """把调用方传的 zh-CN 这类目标码转成 DeepL 的目标码（ZH）。"""
+    code = (target or "zh").strip().replace("_", "-").split("-")[0].upper()
+    return code or "ZH"
 
 
-def _parse_lt_response(data):
-    """解析 LibreTranslate 返回：{translatedText, detectedLanguage?}。"""
-    if not isinstance(data, dict):
-        raise TranslationError("翻译结果解析失败")
-    translated = data.get("translatedText")
-    if isinstance(translated, list):
-        translated = "".join(str(t) for t in translated)
-    if not isinstance(translated, str):
-        raise TranslationError("翻译结果解析失败")
-    detected = None
-    det = data.get("detectedLanguage")
-    if isinstance(det, dict):
-        detected = det.get("language")
-    elif isinstance(det, list) and det and isinstance(det[0], dict):
-        detected = det[0].get("language")
-    return translated, detected
-
-
-def _lt_translate(text: str, target: str = "zh-CN", http_post=None) -> tuple:
-    """翻译一段文本（调用方负责分段，单段不超过 MAX_CHUNK_CHARS）。"""
+def _deepl_translate(texts, target: str = "zh-CN", http_post=None):
+    """一次 DeepL 请求翻一组文本，按顺序原样返回（译文列表，检测到的源语言）。"""
+    key = _api_key()
+    if not key:
+        raise TranslationError("未配置 DeepL API Key，请在服务器环境文件里设置 MAIL_DEEPL_API_KEY")
     if http_post is None:
         import requests
 
         http_post = requests.post
-    payload = {"q": text, "source": "auto", "target": _target_code(target), "format": "text"}
+    data = [("text", t) for t in texts]
+    data.append(("target_lang", _target_code(target)))
+    headers = {"Authorization": f"DeepL-Auth-Key {key}"}
+    url = _api_url()
     last_error = None
     for attempt in range(3):
         try:
-            resp = http_post(LT_URL, json=payload, timeout=50)
-        except Exception as exc:  # 本地服务没起来、模型没下完都会走到这里
-            last_error = TranslationError(f"本地翻译服务未就绪，请稍后再试: {exc}")
-            if attempt < 2:
-                time.sleep(1 + attempt * 2)
-                continue
-            raise last_error
-        if resp.status_code == 429:
-            last_error = TranslationRateLimited("本地翻译服务限流，请稍后再试")
-            if attempt < 2:
-                time.sleep(1 + attempt * 2)
-                continue
-            raise last_error
-        if resp.status_code != 200:
-            err = ""
-            try:
-                err = (resp.json() or {}).get("error", "")
-            except Exception:
-                pass
-            raise TranslationError(
-                f"本地翻译服务返回 {resp.status_code}" + (f": {err}" if err else "")
-            )
-        try:
-            return _parse_lt_response(resp.json())
-        except TranslationError:
-            raise
+            resp = http_post(url, data=data, headers=headers, timeout=30)
         except Exception as exc:
-            raise TranslationError(f"翻译结果解析失败: {exc}")
+            last_error = TranslationError(f"DeepL 请求失败，请稍后再试: {exc}")
+            if attempt < 2:
+                time.sleep(1 + attempt * 2)
+                continue
+            raise last_error
+        if resp.status_code == 200:
+            try:
+                items = (resp.json() or {}).get("translations", [])
+                out = [item.get("text", "") for item in items]
+                detected = items[0].get("detected_source_language") if items else None
+            except Exception as exc:
+                raise TranslationError(f"翻译结果解析失败: {exc}")
+            if len(out) != len(texts):
+                raise TranslationError("翻译结果数量与原文不符")
+            return out, (detected.lower() if detected else None)
+        if resp.status_code == 429:
+            last_error = TranslationRateLimited("DeepL 限流，请稍后再试")
+            if attempt < 2:
+                time.sleep(1 + attempt * 2)
+                continue
+            raise last_error
+        if resp.status_code == 456:
+            raise TranslationRateLimited("DeepL 免费额度已用完（每月 50 万字符），请下月再试或升级套餐")
+        if resp.status_code in (401, 403):
+            raise TranslationError("DeepL API Key 无效或无权访问，请检查服务器上的 MAIL_DEEPL_API_KEY")
+        err = ""
+        try:
+            err = (resp.json() or {}).get("message", "")
+        except Exception:
+            pass
+        raise TranslationError(
+            f"DeepL 返回 {resp.status_code}" + (f": {err}" if err else "")
+        )
     raise last_error or TranslationError("翻译失败")
 
 
@@ -154,11 +163,14 @@ def translate_text(text: str, target: str = "zh-CN", http_post=None) -> tuple:
         return text, None
     if _is_mostly_chinese(text):
         return text, "zh"
+    chunks = _split_text(text)
     translated_parts, detected = [], None
-    for chunk in _split_text(text):
-        part, chunk_detected = _lt_translate(chunk, target=target, http_post=http_post)
-        translated_parts.append(part)
-        detected = detected or chunk_detected
+    for i in range(0, len(chunks), MAX_TEXTS_PER_REQUEST):
+        parts, group_detected = _deepl_translate(
+            chunks[i : i + MAX_TEXTS_PER_REQUEST], target=target, http_post=http_post
+        )
+        translated_parts.extend(parts)
+        detected = detected or group_detected
     return "".join(translated_parts), detected
 
 
@@ -239,8 +251,8 @@ def _apply_leading_trailing(original: str, translated: str) -> str:
 def translate_html(html_content: str, target: str = "zh-CN", http_post=None) -> tuple:
     """翻译 HTML 邮件：只翻文本节点，标签、属性、链接、图片原样保留。
 
-    文本节点先批量翻译（分隔标记拼接），分隔对不上时自动退回逐节点
-    翻译；长节点内部按段落分段。返回 (译后 HTML, 检测到的源语言)。
+    文本节点按 DeepL 多文本接口成组发送，返回按顺序一一贴回，不拼
+    分隔标记，不存在错位风险。返回 (译后 HTML, 检测到的源语言)。
     """
     parser = _TranslateTreeParser()
     parser.feed(html_content or "")
@@ -249,32 +261,11 @@ def translate_html(html_content: str, target: str = "zh-CN", http_post=None) -> 
     if not nodes:
         return html_content, None
     detected = None
-    # 批量：按总长度分组，分隔标记拼接一次请求。
-    batches, current, current_len = [], [], 0
-    for node in nodes:
-        text = (node.text or "").strip()
-        if current and current_len + len(text) + len(_BATCH_SEP) > MAX_CHUNK_CHARS:
-            batches.append(current)
-            current, current_len = [], 0
-        current.append(node)
-        current_len += len(text) + len(_BATCH_SEP)
-    if current:
-        batches.append(current)
-    for batch in batches:
-        joined = f"\n{_BATCH_SEP}\n".join((n.text or "").strip() for n in batch)
-        try:
-            translated_joined, batch_detected = _lt_translate(joined, target=target, http_post=http_post)
-        except TranslationError:
-            raise
+    for i in range(0, len(nodes), MAX_TEXTS_PER_REQUEST):
+        batch = nodes[i : i + MAX_TEXTS_PER_REQUEST]
+        texts = [(n.text or "").strip() for n in batch]
+        parts, batch_detected = _deepl_translate(texts, target=target, http_post=http_post)
         detected = detected or batch_detected
-        parts = [p.strip() for p in translated_joined.split(_BATCH_SEP)]
-        if len(parts) != len(batch):
-            # 分隔标记被翻译方改动：退回逐节点翻译，绝不错位拼接。
-            for node in batch:
-                part, node_detected = translate_text(node.text or "", target=target, http_post=http_post)
-                node.text = _apply_leading_trailing(node.text or "", part)
-                detected = detected or node_detected
-            continue
         for node, part in zip(batch, parts):
             node.text = _apply_leading_trailing(node.text or "", part)
     return "".join(_serialize_translate_node(child) for child in parser.root.children), detected

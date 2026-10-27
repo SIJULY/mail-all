@@ -127,16 +127,15 @@ iPhone 上“设置 → 邮件 → 账户 → 添加账户 → 其他 → 添加
   邮件设置里改），否则提交口会拒收（防开放中继）；③ iPhone 对通用
   IMAP 是定时拉取，不是 iCloud 那种即时推送，新邮件按你设的获取频率到达。
 
-## 邮件翻译（本地 LibreTranslate）
+## 邮件翻译（DeepL API）
 
-- 详情页的“翻译”按钮走本机 LibreTranslate 服务（127.0.0.1:5000，
-  install.sh 一并安装为 mail-api-translate.service），模型跑在本机，
-  邮件内容不发给任何第三方翻译商，也没有按 IP 的限流。
-- 目前只加载英中两个语言（`--load-only en,zh`），覆盖英文邮件翻中文
-  这个主场景；需要更多语言时改 install.sh 里 `--load-only` 的列表。
-- 首次启动需下载英中语言模型，可能需要几分钟，模型下完之前点翻译
-  会报服务未就绪，等一会儿再试即可；翻译服务地址可用环境变量
-  `MAIL_TRANSLATE_URL` 覆盖。
+- 详情页的“翻译”按钮走 DeepL API 翻译，手动点按时才调用，不自动
+  翻译、不存翻译结果。
+- API Key 只存在服务器环境文件 `mail_api.env` 的 `MAIL_DEEPL_API_KEY`
+  （不进仓库）；Key 以 `:fx` 结尾走免费接口 `api-free.deepl.com`，
+  否则走 `api.deepl.com`，也可用 `MAIL_DEEPL_API_URL` 直接指定接口。
+  免费版每月 50 万字符额度，用完当月会报额度已用完。
+- 没配 Key 时点翻译会明确报错，不静默失败。
 
 ## 说明
 
