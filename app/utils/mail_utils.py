@@ -390,11 +390,13 @@ def strip_urls_for_telegram_preview(text: str) -> str:
     """Telegram 通知专用：把正文里的超链接折掉，只留链接文字。
 
     适用所有正文来源（HTML 去标签后、纯文本原样），不只修某一封：
-    - ``文字 <https://…>``、``文字 (https://…)``、``[文字](https://…)`` 只留文字；
+    - ``文字 <https://…>``、``文字 (https://…)``、``文字 [https://…]``、
+      ``文字（https://…）``、``[文字](https://…)`` 只留文字；
     - 裸网址、www. 开头的网址整段去掉；
     - 营销邮件纯文本版常把长跟踪链接折行，后续那些无空格的长 token 行
       （base64/跟踪参数续行）也一并去掉，否则只去第一行、续行还是一堆乱码；
-    - 去网址后只剩 ``My Account:`` 这类空标签的行也去掉。
+    - 去网址后只剩 ``My Account:`` 这类空标签的行也去掉；
+    - 去网址后残留的空方括号、行尾悬空的 ``[``、只剩分隔符的行也去掉。
     链接本身不丢失：通知末尾的“完整邮件”链接仍指向网页版原文。
     邮箱地址、验证码、普通句子不受影响（只匹配 http(s):// 和 www.）。
     """
@@ -417,6 +419,12 @@ def strip_urls_for_telegram_preview(text: str) -> str:
             had_url = True
             return ""
 
+        # 方括号、全角圆括号里的网址整段去掉。必须在裸网址之前：裸网址
+        # 的 \S+ 会把收尾的 ]、）一起吃掉，只剩一个悬空的 [ —— 这就是
+        # 通知里“账户栏 [”“桌面版 [ | iPhone 版 [”这类残渣的来源。
+        line = re.sub(r"\[https?://[^\]\s]+\]", _remove_url, line, flags=re.I)
+        line = re.sub(r"\[www\.[^\]\s]+\]", _remove_url, line, flags=re.I)
+        line = re.sub(r"（https?://[^）\s]+）", _remove_url, line, flags=re.I)
         # 尖括号、圆括号里的网址整段去掉。
         line = re.sub(r"<https?://[^>\s]+>", _remove_url, line, flags=re.I)
         line = re.sub(r"\(https?://[^)\s]+\)", _remove_url, line, flags=re.I)
@@ -426,6 +434,14 @@ def strip_urls_for_telegram_preview(text: str) -> str:
         line = re.sub(r"\s+([，。；：！？,.;:!?])", r"\1", line).strip()
         line = re.sub(r"^[<>]+|[<>]+$", "", line).strip()
         line = re.sub(r"\(\s*\)", "", line).strip()
+        # 去网址后残留的空方括号、行尾悬空的 [（已 mangled 的旧文本也顺手修掉）。
+        line = re.sub(r"\[\s*\]", "", line).strip()
+        line = re.sub(r"\[\s*$", "", line).strip()
+        # 去网址后多出来的连续空格压成一个。
+        line = re.sub(r" {2,}", " ", line).strip()
+        # 只剩分隔符的行（原先全是链接，如社交图标那一行）直接不要。
+        if re.fullmatch(r"[\s\[\]|·•\-–—/]+", line or ""):
+            line = ""
 
         if had_url:
             # 去网址后只剩一个空标签（如 My Account:），整行不要。
