@@ -588,7 +588,7 @@ def render_email_list_page(
 {% elif nav_mode == 'system' %}
 <div class="detail-page"><div class="detail-head"><style>
 .settings-body{padding:24px;background:#f8fbff;overflow-y:auto;display:block;}
-.settings-page{max-width:1080px;margin:0 auto;width:100%;display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch;}
+.settings-page{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch;}
 .settings-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:20px 22px;box-shadow:0 10px 28px rgba(15,23,42,.05);display:flex;flex-direction:column;gap:16px;overflow:visible;}
 .settings-card--wide{grid-column:1 / -1;}
 .settings-card__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
