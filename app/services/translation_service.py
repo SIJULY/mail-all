@@ -112,7 +112,7 @@ def _deepl_translate(texts, target: str = "zh-CN", http_post=None):
                 continue
             raise last_error
         if resp.status_code == 456:
-            raise TranslationRateLimited("DeepL 免费额度已用完（每月 50 万字符），请下月再试或升级套餐")
+            raise TranslationRateLimited("DeepL 额度已用完，请检查订阅或升级套餐")
         if resp.status_code in (401, 403):
             raise TranslationError("DeepL API Key 无效或无权访问，请检查服务器上的 MAIL_DEEPL_API_KEY")
         err = ""

@@ -134,7 +134,8 @@ iPhone 上“设置 → 邮件 → 账户 → 添加账户 → 其他 → 添加
 - API Key 只存在服务器环境文件 `mail_api.env` 的 `MAIL_DEEPL_API_KEY`
   （不进仓库）；Key 以 `:fx` 结尾走免费接口 `api-free.deepl.com`，
   否则走 `api.deepl.com`，也可用 `MAIL_DEEPL_API_URL` 直接指定接口。
-  免费版每月 50 万字符额度，用完当月会报额度已用完。
+  免费 Developer 计划的额度与有效期以 DeepL 账户页为准（例如一次性
+  100 万字符、一个月使用期限），用完或到期后需升级套餐才能继续用。
 - 没配 Key 时点翻译会明确报错，不静默失败。
 
 ## 说明
