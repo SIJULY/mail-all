@@ -127,16 +127,16 @@ iPhone 上“设置 → 邮件 → 账户 → 添加账户 → 其他 → 添加
   邮件设置里改），否则提交口会拒收（防开放中继）；③ iPhone 对通用
   IMAP 是定时拉取，不是 iCloud 那种即时推送，新邮件按你设的获取频率到达。
 
-## 邮件翻译（DeepL API）
+## 邮件翻译（微软 Translator F0）
 
-- 详情页的“翻译”按钮走 DeepL API 翻译，手动点按时才调用，不自动
-  翻译、不存翻译结果。
-- API Key 只存在服务器环境文件 `mail_api.env` 的 `MAIL_DEEPL_API_KEY`
-  （不进仓库）；Key 以 `:fx` 结尾走免费接口 `api-free.deepl.com`，
-  否则走 `api.deepl.com`，也可用 `MAIL_DEEPL_API_URL` 直接指定接口。
-  免费 Developer 计划的额度与有效期以 DeepL 账户页为准（例如一次性
-  100 万字符、一个月使用期限），用完或到期后需升级套餐才能继续用。
-- 没配 Key 时点翻译会明确报错，不静默失败。
+- 详情页的“翻译”按钮走微软 Translator 接口翻译，手动点按时才调用，
+  不自动翻译、不存翻译结果。
+- 密钥与区域只存在服务器环境文件 `mail_api.env`（不进仓库）：
+  `MAIL_MS_TRANSLATOR_KEY`（资源页“密钥 1”）、
+  `MAIL_MS_TRANSLATOR_REGION`（资源页“位置/区域”，如 `eastasia`；
+  Global 资源可留空）。没配密钥时点翻译会明确报错，不静默失败。
+- F0 是 Azure 定价页上的长期免费档（每月 200 万字符，非试用）；
+  超额后当月请求会被拒绝，需升级 S1 才能继续。
 
 ## 说明
 

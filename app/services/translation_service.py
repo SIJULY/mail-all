@@ -1,17 +1,19 @@
-"""邮件翻译服务：DeepL API。
+"""邮件翻译服务：微软 Translator（Azure F0 免费档）。
 
-手动点翻译时才调用，邮件内容只在那一刻发给 DeepL；不自动翻译、
-不存翻译结果，页面刷新后再次点翻译会重新请求。
+手动点翻译时才调用，邮件内容只在那一刻发给微软翻译接口；不自动
+翻译、不存翻译结果，页面刷新后再次点翻译会重新请求。
 
-API Key 存在服务器环境文件 mail_api.env 的 MAIL_DEEPL_API_KEY（不进
-仓库、不写代码里）；没配 Key 时点翻译会明确报错，不静默失败。
-Key 以 :fx 结尾走免费接口 api-free.deepl.com，否则走 api.deepl.com；
-也可用 MAIL_DEEPL_API_URL 直接指定接口地址。
+密钥与区域只存在服务器环境文件 mail_api.env（不进仓库、不写代码
+里）：MAIL_MS_TRANSLATOR_KEY（资源页“密钥 1”）、
+MAIL_MS_TRANSLATOR_REGION（资源页“位置/区域”，如 eastasia；Global
+资源可留空）。没配密钥时点翻译会明确报错，不静默失败。
+
+F0 是 Azure 定价页上的长期免费档（每月 200 万字符，非试用），不是
+30 天试用；超额后当月请求会被拒绝，需升级 S1 才能继续。
 
 HTML 邮件：只收集文本节点（标签、属性、链接、图片原样保留），按
-DeepL 原生多文本接口一次发一组（每组最多 50 条），按顺序一一对应
-贴回——不用分隔标记拼接，根治此前分隔标记被模型翻译掉导致错位、
-被迫逐节点重翻的问题。
+微软多文本接口一次发一组（每组最多 50 条），按顺序一一对应贴回，
+不拼分隔标记，不存在错位风险。
 """
 
 import html
@@ -20,8 +22,7 @@ import re
 import time
 from html.parser import HTMLParser
 
-_DEEPL_FREE_URL = "https://api-free.deepl.com/v2/translate"
-_DEEPL_PRO_URL = "https://api.deepl.com/v2/translate"
+_MS_ENDPOINT = "https://api.cognitive.microsofttranslator.com/translate"
 MAX_CHUNK_CHARS = 3500
 MAX_TEXTS_PER_REQUEST = 50
 _SKIP_TAGS = {"script", "style", "head", "title", "noscript"}
@@ -56,72 +57,88 @@ def _is_url_or_email(text: str) -> bool:
 
 
 def _api_key() -> str:
-    return os.environ.get("MAIL_DEEPL_API_KEY", "").strip()
+    return os.environ.get("MAIL_MS_TRANSLATOR_KEY", "").strip()
+
+
+def _api_region() -> str:
+    return os.environ.get("MAIL_MS_TRANSLATOR_REGION", "").strip()
 
 
 def _api_url() -> str:
-    override = os.environ.get("MAIL_DEEPL_API_URL", "").strip()
-    if override:
-        return override.rstrip("/")
-    return _DEEPL_FREE_URL if _api_key().endswith(":fx") else _DEEPL_PRO_URL
+    override = os.environ.get("MAIL_MS_TRANSLATOR_ENDPOINT", "").strip()
+    return override.rstrip("/") if override else _MS_ENDPOINT
 
 
 def _target_code(target: str) -> str:
-    """把调用方传的 zh-CN 这类目标码转成 DeepL 的目标码（ZH）。"""
-    code = (target or "zh").strip().replace("_", "-").split("-")[0].upper()
-    return code or "ZH"
+    """把调用方传的 zh-CN 这类目标码转成微软的目标码（zh-Hans）。"""
+    code = (target or "zh").strip().replace("_", "-").lower()
+    if code.startswith("zh"):
+        return "zh-Hans"
+    return code
 
 
-def _deepl_translate(texts, target: str = "zh-CN", http_post=None):
-    """一次 DeepL 请求翻一组文本，按顺序原样返回（译文列表，检测到的源语言）。"""
+def _ms_translate(texts, target: str = "zh-CN", http_post=None):
+    """一次微软翻译请求翻一组文本，按顺序原样返回（译文列表，检测到的源语言）。"""
     key = _api_key()
     if not key:
-        raise TranslationError("未配置 DeepL API Key，请在服务器环境文件里设置 MAIL_DEEPL_API_KEY")
+        raise TranslationError("未配置微软翻译密钥，请在服务器环境文件里设置 MAIL_MS_TRANSLATOR_KEY")
     if http_post is None:
         import requests
 
         http_post = requests.post
-    data = [("text", t) for t in texts]
-    data.append(("target_lang", _target_code(target)))
-    headers = {"Authorization": f"DeepL-Auth-Key {key}"}
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/json",
+    }
+    region = _api_region()
+    if region and region.lower() != "global":
+        headers["Ocp-Apim-Subscription-Region"] = region
+    params = {"api-version": "3.0", "to": _target_code(target)}
+    body = [{"Text": t} for t in texts]
     url = _api_url()
     last_error = None
     for attempt in range(3):
         try:
-            resp = http_post(url, data=data, headers=headers, timeout=30)
+            resp = http_post(url, json=body, headers=headers, params=params, timeout=30)
         except Exception as exc:
-            last_error = TranslationError(f"DeepL 请求失败，请稍后再试: {exc}")
+            last_error = TranslationError(f"微软翻译请求失败，请稍后再试: {exc}")
             if attempt < 2:
                 time.sleep(1 + attempt * 2)
                 continue
             raise last_error
         if resp.status_code == 200:
             try:
-                items = (resp.json() or {}).get("translations", [])
-                out = [item.get("text", "") for item in items]
-                detected = items[0].get("detected_source_language") if items else None
+                items = resp.json() or []
+                out = []
+                detected = None
+                for item in items:
+                    trans = (item.get("translations") or [{}])[0]
+                    out.append(trans.get("text", ""))
+                    if detected is None:
+                        det = item.get("detectedLanguage") or {}
+                        detected = det.get("language")
             except Exception as exc:
                 raise TranslationError(f"翻译结果解析失败: {exc}")
             if len(out) != len(texts):
                 raise TranslationError("翻译结果数量与原文不符")
             return out, (detected.lower() if detected else None)
         if resp.status_code == 429:
-            last_error = TranslationRateLimited("DeepL 限流，请稍后再试")
+            last_error = TranslationRateLimited("微软翻译限流，请稍后再试")
             if attempt < 2:
                 time.sleep(1 + attempt * 2)
                 continue
             raise last_error
-        if resp.status_code == 456:
-            raise TranslationRateLimited("DeepL 额度已用完，请检查订阅或升级套餐")
-        if resp.status_code in (401, 403):
-            raise TranslationError("DeepL API Key 无效或无权访问，请检查服务器上的 MAIL_DEEPL_API_KEY")
+        if resp.status_code == 401:
+            raise TranslationError("微软翻译密钥无效，请检查服务器上的 MAIL_MS_TRANSLATOR_KEY")
+        if resp.status_code == 403:
+            raise TranslationError("微软翻译额度用完或区域不对：请检查 MAIL_MS_TRANSLATOR_REGION 是否与资源位置一致，或升级 S1")
         err = ""
         try:
-            err = (resp.json() or {}).get("message", "")
+            err = (resp.json() or {}).get("error", {}).get("message", "")
         except Exception:
             pass
         raise TranslationError(
-            f"DeepL 返回 {resp.status_code}" + (f": {err}" if err else "")
+            f"微软翻译返回 {resp.status_code}" + (f": {err}" if err else "")
         )
     raise last_error or TranslationError("翻译失败")
 
@@ -166,7 +183,7 @@ def translate_text(text: str, target: str = "zh-CN", http_post=None) -> tuple:
     chunks = _split_text(text)
     translated_parts, detected = [], None
     for i in range(0, len(chunks), MAX_TEXTS_PER_REQUEST):
-        parts, group_detected = _deepl_translate(
+        parts, group_detected = _ms_translate(
             chunks[i : i + MAX_TEXTS_PER_REQUEST], target=target, http_post=http_post
         )
         translated_parts.extend(parts)
@@ -251,7 +268,7 @@ def _apply_leading_trailing(original: str, translated: str) -> str:
 def translate_html(html_content: str, target: str = "zh-CN", http_post=None) -> tuple:
     """翻译 HTML 邮件：只翻文本节点，标签、属性、链接、图片原样保留。
 
-    文本节点按 DeepL 多文本接口成组发送，返回按顺序一一贴回，不拼
+    文本节点按微软多文本接口成组发送，返回按顺序一一贴回，不拼
     分隔标记，不存在错位风险。返回 (译后 HTML, 检测到的源语言)。
     """
     parser = _TranslateTreeParser()
@@ -264,7 +281,7 @@ def translate_html(html_content: str, target: str = "zh-CN", http_post=None) -> 
     for i in range(0, len(nodes), MAX_TEXTS_PER_REQUEST):
         batch = nodes[i : i + MAX_TEXTS_PER_REQUEST]
         texts = [(n.text or "").strip() for n in batch]
-        parts, batch_detected = _deepl_translate(texts, target=target, http_post=http_post)
+        parts, batch_detected = _ms_translate(texts, target=target, http_post=http_post)
         detected = detected or batch_detected
         for node, part in zip(batch, parts):
             node.text = _apply_leading_trailing(node.text or "", part)
