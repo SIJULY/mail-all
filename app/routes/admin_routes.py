@@ -618,6 +618,17 @@ def register_admin_routes(app):
                 auto_refresh_interval = (request.form.get("auto_refresh_interval") or "0").strip()
                 set_app_setting("auto_refresh_interval", auto_refresh_interval)
                 flash("收件箱自动刷新配置已保存", "success")
+            elif action == "translate":
+                translate_key = (request.form.get("translate_key") or "").strip()
+                translate_region = (request.form.get("translate_region") or "").strip()
+                translate_endpoint = (request.form.get("translate_endpoint") or "").strip()
+                translate_enabled = "1" if request.form.get("translate_enabled") == "on" else "0"
+                if translate_key:
+                    set_app_setting("translate_key", translate_key)
+                set_app_setting("translate_region", translate_region)
+                set_app_setting("translate_endpoint", translate_endpoint)
+                set_app_setting("translate_enabled", translate_enabled)
+                flash("邮件翻译配置已保存", "success")
             else:
                 flash("未知的操作类型", "error")
         except Exception as e:
@@ -654,6 +665,25 @@ def register_admin_routes(app):
         except Exception as e:
             flash(f"请求失败: {e}", "error")
             
+        return redirect(url_for("admin_system"))
+
+
+    @app.route("/send_test_translation", methods=["POST"])
+    @login_required
+    @admin_required
+    def send_test_translation():
+        from app.services.translation_service import TranslationError, translate_text
+
+        try:
+            translated, _detected = translate_text(
+                "Hello, this is a test. If you can read this in Chinese, the translation setup works."
+            )
+            flash(f"测试翻译成功：{translated}", "success")
+        except TranslationError as e:
+            flash(f"测试翻译失败：{e}", "error")
+        except Exception as e:
+            app.logger.error(f"测试翻译失败: {e}")
+            flash(f"测试翻译失败：{e}", "error")
         return redirect(url_for("admin_system"))
 
 

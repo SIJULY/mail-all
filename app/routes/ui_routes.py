@@ -93,12 +93,13 @@ def register_ui_routes(app):
     @app.route("/api/translate_email", methods=["POST"])
     @login_required
     def translate_email():
-        """详情页手动翻译：只在用户点翻译按钮时调用，内容发给 Google
-        免费接口（无需 Key），不自动翻译、不存翻译结果。单管理员模式，
+        """详情页手动翻译：只在用户点翻译按钮时调用，内容发给微软
+        Translator 接口，不自动翻译、不存翻译结果。单管理员模式，
         管理员可翻任意邮件；已发送邮件同样可翻。"""
         from app.repositories.db import get_db_conn
         from app.services.translation_service import (
             TranslationRateLimited,
+            is_translation_enabled,
             translate_mail_body,
             translate_text,
         )
@@ -109,6 +110,9 @@ def register_ui_routes(app):
             email_id = int(email_id)
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "邮件 ID 无效"}), 400
+        if not is_translation_enabled():
+            # 返回 200 让前端直接展示这条提示，而不是只显示 HTTP 状态码
+            return jsonify({"ok": False, "error": "翻译功能未开启，请在系统设置 → 邮件翻译里启用并填写密钥"}), 200
         conn = get_db_conn()
         try:
             row = None

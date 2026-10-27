@@ -3,10 +3,12 @@
 手动点翻译时才调用，邮件内容只在那一刻发给微软翻译接口；不自动
 翻译、不存翻译结果，页面刷新后再次点翻译会重新请求。
 
-密钥与区域只存在服务器环境文件 mail_api.env（不进仓库、不写代码
-里）：MAIL_MS_TRANSLATOR_KEY（资源页“密钥 1”）、
-MAIL_MS_TRANSLATOR_REGION（资源页“位置/区域”，如 eastasia；Global
-资源可留空）。没配密钥时点翻译会明确报错，不静默失败。
+配置在系统设置页 → 邮件翻译里填（存数据库 app_settings，不进仓库）：
+密钥、区域、终结点，以及启用开关。服务器环境文件 mail_api.env 里
+的 MAIL_MS_TRANSLATOR_KEY / MAIL_MS_TRANSLATOR_REGION /
+MAIL_MS_TRANSLATOR_ENDPOINT 仍可作兜底：数据库里没填时用环境文件
+的值；数据库里填了则以数据库为准。这样老部署更新后不用重填密钥
+也能继续用，新部署直接在设置页里填。
 
 F0 是 Azure 定价页上的长期免费档（每月 200 万字符，非试用），不是
 30 天试用；超额后当月请求会被拒绝，需升级 S1 才能继续。
@@ -56,17 +58,53 @@ def _is_url_or_email(text: str) -> bool:
     return False
 
 
-def _api_key() -> str:
-    return os.environ.get("MAIL_MS_TRANSLATOR_KEY", "").strip()
+def _db_setting(key: str) -> str:
+    """读数据库里的翻译配置。数据库不可用时返回空串，走环境文件兜底。"""
+    try:
+        from app.repositories.settings_repo import get_app_setting
+
+        return (get_app_setting(key, "") or "").strip()
+    except Exception:
+        return ""
 
 
-def _api_region() -> str:
-    return os.environ.get("MAIL_MS_TRANSLATOR_REGION", "").strip()
+def _resolve_key() -> str:
+    """密钥原文：只在发请求时用，绝不进设置页模板。"""
+    return _db_setting("translate_key") or os.environ.get("MAIL_MS_TRANSLATOR_KEY", "").strip()
 
 
-def _api_url() -> str:
-    override = os.environ.get("MAIL_MS_TRANSLATOR_ENDPOINT", "").strip()
-    return override.rstrip("/") if override else _MS_ENDPOINT
+def get_translation_config() -> dict:
+    """翻译的有效配置：数据库优先，环境文件兜底。
+
+    启用规则：数据库里有 translate_enabled 开关时以它为准；没存过
+    开关（老部署刚更新）时，有密钥即视为启用、无密钥即关闭，这样
+    老部署不用重填密钥也能继续用。
+    """
+    key = _resolve_key()
+    db_region = _db_setting("translate_region")
+    region = db_region or os.environ.get("MAIL_MS_TRANSLATOR_REGION", "").strip()
+    db_endpoint = _db_setting("translate_endpoint")
+    endpoint = (
+        db_endpoint
+        or os.environ.get("MAIL_MS_TRANSLATOR_ENDPOINT", "").strip()
+        or _MS_ENDPOINT
+    )
+    toggle = _db_setting("translate_enabled")
+    enabled = (toggle == "1") if toggle != "" else bool(key)
+    return {
+        "enabled": enabled,
+        "key_configured": bool(key),
+        # 设置页只展示脱敏尾号，避免把完整密钥渲染进页面
+        "key_display": (f"…{key[-4:]}" if len(key) > 4 else "已配置") if key else "",
+        "region": region,
+        "endpoint": endpoint,
+        # 设置页终结点输入框回填用：只填数据库里存的值，空着表示用默认
+        "endpoint_db": db_endpoint,
+    }
+
+
+def is_translation_enabled() -> bool:
+    return get_translation_config()["enabled"]
 
 
 def _target_code(target: str) -> str:
@@ -79,9 +117,13 @@ def _target_code(target: str) -> str:
 
 def _ms_translate(texts, target: str = "zh-CN", http_post=None):
     """一次微软翻译请求翻一组文本，按顺序原样返回（译文列表，检测到的源语言）。"""
-    key = _api_key()
+    cfg = get_translation_config()
+    if not cfg["enabled"]:
+        raise TranslationError("翻译功能未开启，请在系统设置 → 邮件翻译里启用并填写密钥")
+    key = _resolve_key()
     if not key:
-        raise TranslationError("未配置微软翻译密钥，请在服务器环境文件里设置 MAIL_MS_TRANSLATOR_KEY")
+        # 上面 enabled 为真必有密钥，这里只是兜底，正常走不到
+        raise TranslationError("未配置微软翻译密钥，请在系统设置 → 邮件翻译里填写密钥")
     if http_post is None:
         import requests
 
@@ -90,12 +132,12 @@ def _ms_translate(texts, target: str = "zh-CN", http_post=None):
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": "application/json",
     }
-    region = _api_region()
+    region = cfg["region"]
     if region and region.lower() != "global":
         headers["Ocp-Apim-Subscription-Region"] = region
     params = {"api-version": "3.0", "to": _target_code(target)}
     body = [{"Text": t} for t in texts]
-    url = _api_url()
+    url = cfg["endpoint"].rstrip("/")
     last_error = None
     for attempt in range(3):
         try:
@@ -129,9 +171,9 @@ def _ms_translate(texts, target: str = "zh-CN", http_post=None):
                 continue
             raise last_error
         if resp.status_code == 401:
-            raise TranslationError("微软翻译密钥无效，请检查服务器上的 MAIL_MS_TRANSLATOR_KEY")
+            raise TranslationError("微软翻译密钥无效，请在系统设置 → 邮件翻译里检查密钥")
         if resp.status_code == 403:
-            raise TranslationError("微软翻译额度用完或区域不对：请检查 MAIL_MS_TRANSLATOR_REGION 是否与资源位置一致，或升级 S1")
+            raise TranslationError("微软翻译额度用完或区域不对：请在系统设置 → 邮件翻译里检查区域是否与资源位置一致，或升级 S1")
         err = ""
         try:
             err = (resp.json() or {}).get("error", {}).get("message", "")

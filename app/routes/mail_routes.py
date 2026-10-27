@@ -151,6 +151,16 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
         system_modal_data["spam_rules"] = get_all_spam_rules()
         system_modal_data["spam_rule_types"] = RULE_TYPES
 
+        from app.services.translation_service import get_translation_config
+        _tcfg = get_translation_config()
+        system_modal_data.update({
+            "translate_enabled": _tcfg["enabled"],
+            "translate_key_configured": _tcfg["key_configured"],
+            "translate_key_display": _tcfg["key_display"],
+            "translate_region": _tcfg["region"],
+            "translate_endpoint_db": _tcfg["endpoint_db"],
+        })
+
         mail_api_data = {
             "key": get_app_setting("mail_api_key", ""),
             "enabled": get_app_setting("mail_api_enabled", "1") == "1",
