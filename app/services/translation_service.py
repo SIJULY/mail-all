@@ -235,7 +235,9 @@ class _TranslateTreeParser(HTMLParser):
 def _serialize_translate_node(node) -> str:
     if node.tag is None:
         return html.escape(node.text or "", quote=False)
-    attrs = "".join(f' {name}="{html.escape(value, quote=True)}"' for name, value in node.attrs.items())
+    # HTMLParser 会把无值属性（如 <input disabled>）记成 None，escape 前要先兜底，
+    # 否则整封邮件的翻译会在这里崩掉。
+    attrs = "".join(f' {name}="{html.escape(value or "", quote=True)}"' for name, value in node.attrs.items())
     if node.tag in _TranslateTreeParser._VOID:
         return f"<{node.tag}{attrs}>"
     inner = "".join(_serialize_translate_node(child) for child in node.children)
