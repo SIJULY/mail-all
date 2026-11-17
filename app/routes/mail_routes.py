@@ -251,7 +251,14 @@ def register_mail_routes(app):
             for variant in mail_variants:
                 where_parts.append("lower(trim(recipient)) = lower(trim(?))")
                 params.append(variant)
+                # 转发来的信：信封收件人是投递邮箱，信头 To 才是用户要查的地址，
+                # 存在 original_recipient 列里（2026-11-17 AWS 构建者 ID 邮件实测：
+                # recipient=jiyu57359@mail.sijuly.uk，original_recipient=lamarsendel+ed@gmail.com）。
+                where_parts.append("lower(trim(ifnull(original_recipient, ''))) = lower(trim(?))")
+                params.append(variant)
                 priority_parts.append("lower(trim(recipient)) = lower(trim(?))")
+                priority_params.append(variant)
+                priority_parts.append("lower(trim(ifnull(original_recipient, ''))) = lower(trim(?))")
                 priority_params.append(variant)
             for variant in mail_variants:
                 recipient_like = f"%{variant}%"
