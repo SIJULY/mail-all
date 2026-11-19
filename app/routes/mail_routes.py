@@ -165,6 +165,7 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
             "key": get_app_setting("mail_api_key", ""),
             "enabled": get_app_setting("mail_api_enabled", "1") == "1",
             "mail_template": f"/Mail?token={SPECIAL_VIEW_TOKEN}&mail={{mail}}",
+            "mail_code_template": f"/MailCode?token={SPECIAL_VIEW_TOKEN}&mail={{mail}}",
         }
 
     # IMAP 设置向导只在系统设置页需要：端口检测会连本机端口，
@@ -206,6 +207,66 @@ def base_view_logic(is_admin_view, mark_as_read=True, recipient_override=None, n
     )
 
 
+
+def _mailcode_wants_html():
+    """浏览器打开 /MailCode 时返回易读 HTML 页面；程序调用返回 JSON。
+    面板用 urllib 且 User-Agent 是 aws-panel，Accept 里没有 text/html，一定走 JSON。"""
+    ua = (request.headers.get("User-Agent") or "")
+    if ua.startswith("aws-panel"):
+        return False
+    accept = (request.headers.get("Accept") or "")
+    return "text/html" in accept
+
+def _mailcode_html_page(msg):
+    """浏览器打开 /MailCode 取到码后显示的易读页面（只显示验证码）。"""
+    import html as _html
+    code = html.escape(str(msg.get("code") or ""))
+    recipient = html.escape(str(msg.get("recipient") or ""))
+    sender = html.escape(str(msg.get("sender") or ""))
+    subject = html.escape(str(msg.get("subject") or ""))
+    ts = html.escape(str(msg.get("timestamp") or ""))
+    return (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>验证码 " + code + "</title>"
+        "<style>body{margin:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#1e293b}"
+        ".card{max-width:520px;margin:60px auto;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(15,23,42,.12);padding:32px 28px;text-align:center}"
+        ".tag{display:inline-block;background:#eef2ff;color:#4f46e5;font-size:12px;font-weight:700;border-radius:999px;padding:4px 12px;margin-bottom:14px}"
+        "h1{font-size:15px;color:#64748b;margin:0 0 10px;font-weight:700}"
+        ".code{font-size:52px;font-weight:900;letter-spacing:8px;color:#111827;margin:6px 0 4px}"
+        ".meta{font-size:13px;color:#64748b;line-height:1.9;word-break:break-all}"
+        ".note{margin-top:18px;font-size:12px;color:#94a3b8;line-height:1.7}</style></head><body>"
+        "<div class=\"card\"><div class=\"tag\">验证码</div><h1>Verification Code</h1>"
+        "<div class=\"code\">" + code + "</div>"
+        "<div class=\"meta\">收件人：" + recipient + "<br>发件人：" + sender + "<br>主题：" + subject + "<br>时间：" + ts + "</div>"
+        "<div class=\"note\">这封邮件已从收件箱删除（查后自动删除，防旧码重复取）。</div></div></body></html>"
+    )
+
+def _mailcode_notfound_html():
+    """浏览器打开 /MailCode 没取到码时显示的易读页面。"""
+    return (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>没有找到验证码</title>"
+        "<style>body{margin:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#1e293b}"
+        ".card{max-width:520px;margin:60px auto;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(15,23,42,.12);padding:32px 28px;text-align:center}"
+        "h1{font-size:18px;color:#111827;margin:0 0 10px}"
+        "p{font-size:13px;color:#64748b;line-height:1.9}</style></head><body>"
+        "<div class=\"card\"><h1>没有找到验证码</h1>"
+        "<p>该邮箱暂无未读的验证码邮件（或已读过、已被取走）。<br>请确认验证码已发出，或重新发送一封后再查。</p></div></body></html>"
+    )
+
+def _mailcode_success_response(msg):
+    """取到码：浏览器返回易读 HTML，程序调用返回 JSON。"""
+    if _mailcode_wants_html():
+        return Response(_mailcode_html_page(msg), mimetype="text/html; charset=utf-8")
+    return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
+
+def _mailcode_notfound_response():
+    """没取到码：浏览器返回易读 HTML，程序调用返回 JSON 404。"""
+    if _mailcode_wants_html():
+        return Response(_mailcode_notfound_html(), mimetype="text/html; charset=utf-8"), 404
+    return jsonify({"error": "Verification email not found"}), 404
 
 def register_mail_routes(app):
     @app.route("/Mail")
@@ -387,7 +448,7 @@ def register_mail_routes(app):
                         app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
                     else:
                         app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 已返回验证码邮件但按 keep=1 保留 id={msg['id']} code={msg['code']}")
-                    return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
+                    return _mailcode_success_response(msg)
             if matched_messages:
                 delay_seconds = random.randint(5, 10)
                 app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 当前匹配到的验证码邮件都已处理，等待 {delay_seconds} 秒后重试...")
@@ -409,9 +470,9 @@ def register_mail_routes(app):
                             app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回并删除验证码邮件 id={msg['id']} code={msg['code']}")
                         else:
                             app.logger.info(f"/MailCode: 邮箱 {recipient_mail} 重试后已返回验证码邮件但按 keep=1 保留 id={msg['id']} code={msg['code']}")
-                        return jsonify({"id": msg["id"], "recipient": msg["recipient"], "sender": msg["sender"], "subject": msg["subject"], "timestamp": msg["timestamp"], "body_type": msg["body_type"], "code": msg["code"]})
-                return jsonify({"error": "Verification email not found"}), 404
-            return jsonify({"error": "Verification email not found"}), 404
+                        return _mailcode_success_response(msg)
+                return _mailcode_notfound_response()
+            return _mailcode_notfound_response()
         finally:
             conn.close()
 
